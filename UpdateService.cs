@@ -17,7 +17,7 @@ public sealed record UpdateCheckResult(
 public static class UpdateService
 {
     private const string LatestReleaseApi =
-        "https://api.github.com/repos/mirbehnam/RtlTerminal/releases/latest";
+        "https://api.github.com/repos/cybersec-iq/rtl-terminal/releases/latest";
     private static readonly HttpClient Client = CreateClient();
 
     public static async Task<UpdateCheckResult> CheckAsync(
@@ -90,7 +90,7 @@ public static class UpdateService
             Timeout = TimeSpan.FromSeconds(10)
         };
         client.DefaultRequestHeaders.UserAgent.Add(
-            new ProductInfoHeaderValue("RtlTerminal", "1.0"));
+            new ProductInfoHeaderValue("AryanIQ.RtlTerminal", "1.0"));
         client.DefaultRequestHeaders.Accept.Add(
             new MediaTypeWithQualityHeaderValue(
                 "application/vnd.github+json"));

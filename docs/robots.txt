@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://mirbehnam.github.io/RtlTerminal/sitemap.xml
+Sitemap: https://github.com/cybersec-iq/rtl-terminalsitemap.xml

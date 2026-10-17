@@ -5,12 +5,12 @@ namespace RtlTerminal;
 
 public static class ContextMenuIntegration
 {
-    private const string SettingsKey = @"Software\RtlTerminal";
+    private const string SettingsKey = @"Software\AryanIQ\RtlTerminal";
     private const string PromptValue = "ContextMenuPromptAnswered";
     private const string DirectoryShellKey =
-        @"Software\Classes\Directory\shell\RtlTerminal";
+        @"Software\Classes\Directory\shell\AryanIQRtlTerminal";
     private const string BackgroundShellKey =
-        @"Software\Classes\Directory\Background\shell\RtlTerminal";
+        @"Software\Classes\Directory\Background\shell\AryanIQRtlTerminal";
 
     public static bool HasAnsweredInitialPrompt()
     {
@@ -57,7 +57,7 @@ public static class ContextMenuIntegration
         string pathPlaceholder)
     {
         using var shellKey = Registry.CurrentUser.CreateSubKey(keyPath);
-        shellKey.SetValue(null, "Open in RtlTerminal");
+        shellKey.SetValue(null, "Open in AryanIQ Rtl Terminal");
         shellKey.SetValue("Icon", executablePath);
 
         using var commandKey = shellKey.CreateSubKey("command");

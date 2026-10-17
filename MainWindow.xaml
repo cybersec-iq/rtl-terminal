@@ -3,7 +3,7 @@
         xmlns:local="clr-namespace:RtlTerminal"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
-        Title="RtlTerminal"
+        Title="Rtl Terminal | AryanIQ"
         Icon="RtlTerminal.ico"
         Width="980"
         Height="620"
@@ -557,7 +557,7 @@
             </MenuItem>
             <MenuItem Header="_Tools">
                 <MenuItem x:Name="ContextMenuIntegrationMenuItem"
-                          Header="Add _Open in RtlTerminal"
+                          Header="Add _Open in AryanIQ Rtl Terminal"
                           IsCheckable="True"
                           Click="ContextMenuIntegrationMenuItem_Click" />
             </MenuItem>

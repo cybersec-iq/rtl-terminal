@@ -7,6 +7,9 @@ public sealed record ColorScheme(string Name, AppThemeKind Theme, string Backgro
 {
     public static readonly IReadOnlyList<ColorScheme> All =
     [
+        new("AryanIQ Phosphor", AppThemeKind.Dark, "000000", "39FF14",
+            ["000000", "FF5555", "13A10E", "F9F1A5", "3B78FF", "B4009E", "61D6D6", "39FF14",
+             "005500", "FF7777", "39FF14", "FFFF66", "66A3FF", "E066D7", "8FFFFF", "B4FF9F"]),
         new("Campbell", AppThemeKind.Dark, "0C0C0C", "CCCCCC",
             ["0C0C0C", "C50F1F", "13A10E", "C19C00", "0037DA", "881798", "3A96DD", "CCCCCC",
              "767676", "E74856", "16C60C", "F9F1A5", "3B78FF", "B4009E", "61D6D6", "F2F2F2"]),

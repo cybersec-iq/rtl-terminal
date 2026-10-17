@@ -2,16 +2,16 @@
 #ifndef AppVersion
   #error AppVersion must be supplied by build-release.ps1 or the release workflow
 #endif
-#define AppPublisher "behnamapps"
+#define AppPublisher "AryanIQ"
 #define AppExeName "RtlTerminal.exe"
 #define PublishDirectory "..\publish\win-x64"
 
 [Setup]
-AppId={{A5BC0F01-F4CD-49C4-B85F-8B88ACDC4416}
+AppId={{472E1923-0EA9-44D5-97D5-A45A2D7DDB96}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
-DefaultDirName={autopf}\behnamapps\Rtl Terminal
+DefaultDirName={autopf}\AryanIQ\Rtl Terminal
 DefaultGroupName=Rtl Terminal
 UninstallDisplayName=Rtl Terminal
 UninstallDisplayIcon={app}\{#AppExeName}
@@ -50,5 +50,5 @@ Filename: "{app}\{#AppExeName}"; Description: "Launch Rtl Terminal"; Flags: nowa
 Type: filesandordirs; Name: "{app}"
 
 [UninstallRun]
-Filename: "{sys}\reg.exe"; Parameters: "delete ""HKCU\Software\Classes\Directory\shell\RtlTerminal"" /f"; Flags: runhidden
-Filename: "{sys}\reg.exe"; Parameters: "delete ""HKCU\Software\Classes\Directory\Background\shell\RtlTerminal"" /f"; Flags: runhidden
+Filename: "{sys}\reg.exe"; Parameters: "delete ""HKCU\Software\Classes\Directory\shell\AryanIQRtlTerminal"" /f"; Flags: runhidden
+Filename: "{sys}\reg.exe"; Parameters: "delete ""HKCU\Software\Classes\Directory\Background\shell\AryanIQRtlTerminal"" /f"; Flags: runhidden

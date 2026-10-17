@@ -104,7 +104,7 @@ public partial class FontSettingsWindow : Window
         Line("✓ Build completed successfully", option.Ansi(2));
         Line("! Warning: check configuration", option.Ansi(3));
         Line("× Error: example message", option.Ansi(1));
-        Line("https://github.com/mirbehnam/RtlTerminal", option.Ansi(4));
+        Line("https://github.com/cybersec-iq/rtl-terminal", option.Ansi(4));
         ThemePreviewPalette.Children.Clear();
         for (var i = 0; i < 16; i++)
             ThemePreviewPalette.Children.Add(new Border { Width = 22, Height = 22, Margin = new Thickness(0,0,4,4), CornerRadius = new CornerRadius(3), Background = ThemeOption.Brush(option.Ansi(i)), ToolTip = $"ANSI {i}" });

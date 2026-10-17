@@ -1022,10 +1022,13 @@ ApplySavedFontSettings();
             this,
             """
             Rtl Terminal
-            by behnamapps
+            by AryanIQ
 
-            Developer: behnam tajadini
-            YouTube: aka_techno
+            Customized by: AryanIQ
+            GitHub: github.com/cybersec-iq
+            Instagram: @AryanIQ
+
+            Based on Rtl Terminal by behnamapps (MIT License)
 
             تقدیم به همه فارسی زبانان
             """,
@@ -1073,7 +1076,7 @@ ApplySavedFontSettings();
 
         var result = MessageBox.Show(
             this,
-            "آیا گزینه «Open in RtlTerminal» به منوی راست‌کلیک پوشه‌ها اضافه شود؟",
+            "آیا گزینه «Open in AryanIQ Rtl Terminal» به منوی راست‌کلیک پوشه‌ها اضافه شود؟",
             "RtlTerminal",
             MessageBoxButton.YesNo,
             MessageBoxImage.Question);
@@ -1108,8 +1111,8 @@ ApplySavedFontSettings();
             ContextMenuIntegration.IsInstalled();
         ContextMenuIntegrationMenuItem.Header =
             ContextMenuIntegrationMenuItem.IsChecked
-                ? "Remove _Open in RtlTerminal"
-                : "Add _Open in RtlTerminal";
+                ? "Remove _Open in AryanIQ Rtl Terminal"
+                : "Add _Open in AryanIQ Rtl Terminal";
         _updatingContextMenuItem = false;
     }
 
@@ -1181,15 +1184,15 @@ ApplySavedFontSettings();
         {
             TerminalProfile.PowerShell =>
                 """
-                C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo -NoExit -Command "$lines=@('+--------------------------------------------------------+','| RtlTerminal v{APP_VERSION}                                     |','|                                                        |','| Author : Behnam Tajadini                               |','| Source : github.com/mirbehnam/RtlTerminal              |','| YouTube: @aka_techno                                   |','+--------------------------------------------------------+','','  پشتیبانی کامل از زبان فارسی و راست‌به‌چپ',''); $lines | ForEach-Object { Write-Host $_ }"
+                C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo -NoExit -Command "$lines=@('+--------------------------------------------------------+','| Rtl Terminal v{APP_VERSION}                                     |','|                                                        |','| Author : AryanIQ                               |','| Source : github.com/cybersec-iq              |','| Instagram: @AryanIQ                                   |','+--------------------------------------------------------+','','  پشتیبانی کامل از زبان فارسی و راست‌به‌چپ',''); $lines | ForEach-Object { Write-Host $_ }"
                 """,
             TerminalProfile.Wsl =>
                 """
-                C:\Windows\System32\wsl.exe --exec sh -lc "printf '%s\n' '+--------------------------------------------------------+' '| RtlTerminal v{APP_VERSION}                                     |' '|                                                        |' '| Author : Behnam Tajadini                               |' '| Source : github.com/mirbehnam/RtlTerminal              |' '| YouTube: @aka_techno                                   |' '+--------------------------------------------------------+' '' '  پشتیبانی کامل از زبان فارسی و راست‌به‌چپ' ''; exec \"${SHELL:-/bin/bash}\" -l"
+                C:\Windows\System32\wsl.exe --exec sh -lc "printf '%s\n' '+--------------------------------------------------------+' '| Rtl Terminal v{APP_VERSION}                                     |' '|                                                        |' '| Author : AryanIQ                               |' '| Source : github.com/cybersec-iq              |' '| Instagram: @AryanIQ                                   |' '+--------------------------------------------------------+' '' '  پشتیبانی کامل از زبان فارسی و راست‌به‌چپ' ''; exec \"${SHELL:-/bin/bash}\" -l"
                 """,
             _ =>
                 """
-                C:\Windows\System32\cmd.exe /D /Q /V:OFF /K "chcp 65001>nul & echo +--------------------------------------------------------+& echo ^| RtlTerminal v{APP_VERSION}                                     ^|& echo ^|                                                        ^|& echo ^| Author : Behnam Tajadini                               ^|& echo ^| Source : github.com/mirbehnam/RtlTerminal              ^|& echo ^| YouTube: @aka_techno                                   ^|& echo +--------------------------------------------------------+& echo.& echo   پشتیبانی کامل از زبان فارسی و راست‌به‌چپ& echo."
+                C:\Windows\System32\cmd.exe /D /Q /V:OFF /K "chcp 65001>nul & echo +--------------------------------------------------------+& echo ^| Rtl Terminal v{APP_VERSION}                                     ^|& echo ^|                                                        ^|& echo ^| Author : AryanIQ                               ^|& echo ^| Source : github.com/cybersec-iq              ^|& echo ^| Instagram: @AryanIQ                                   ^|& echo +--------------------------------------------------------+& echo.& echo   پشتیبانی کامل از زبان فارسی و راست‌به‌چپ& echo."
                 """
         }).Replace("{APP_VERSION}", AppVersion.Display);
         if (profile == TerminalProfile.Wsl && !string.IsNullOrWhiteSpace(wslDistribution))
@@ -1785,9 +1788,17 @@ ApplySavedFontSettings();
             return;
         }
 
-        if (controlPressed && shiftPressed && e.Key == Key.A)
+        if (controlPressed && e.Key == Key.A)
         {
             ActiveView.SelectAll();
+            e.Handled = true;
+            return;
+        }
+
+        if (shiftPressed && GetEffectiveKey(e) == Key.Enter && ActivePane?.Profile == TerminalProfile.PowerShell)
+        {
+            // Keep Shift+Enter distinct from Enter for PSReadLine's AddLine binding.
+            ActiveSession.Write("\x1b[13;2u");
             e.Handled = true;
             return;
         }

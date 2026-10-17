@@ -13,7 +13,7 @@ public enum HtmlPreviewScope { CurrentPage, RecentToEnd, EntireHistory }
 
 public static class AppSettings
 {
-    private const string SettingsKey = @"Software\RtlTerminal";
+    private const string SettingsKey = @"Software\AryanIQ\RtlTerminal";
     private static readonly int[] SupportedHistorySizes = [2000, 5000, 10000];
 
     public static string? LoadTerminalProfile()
@@ -150,7 +150,11 @@ public static class AppSettings
     public static string? LoadColorScheme()
     {
         using var key = Registry.CurrentUser.OpenSubKey(SettingsKey);
-        return key?.GetValue("ColorScheme") as string;
+        // A missing value means first launch. An explicitly saved empty value
+        // remains the built-in dark theme selection.
+        return key?.GetValue("ColorScheme") is string saved
+            ? saved
+            : "AryanIQ Phosphor";
     }
 
     public static void SaveColorScheme(string? name)

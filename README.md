@@ -19,11 +19,11 @@
 
   **Latest Windows 10/11 installer — no separate .NET installation required**
 
-  ### [⬇️ دریافت آخرین نسخهٔ منتشرشده](https://github.com/mirbehnam/RtlTerminal/releases/latest)
+  ### [⬇️ دریافت آخرین نسخهٔ منتشرشده](https://github.com/cybersec-iq/rtl-terminal/releases/latest)
 
-  ### [⬇️ Get the latest published release](https://github.com/mirbehnam/RtlTerminal/releases/latest)
+  ### [⬇️ Get the latest published release](https://github.com/cybersec-iq/rtl-terminal/releases/latest)
 
-  [وب‌سایت رسمی · Official website](https://mirbehnam.github.io/RtlTerminal/) · [مشاهده همه نسخه‌ها · View all releases](https://github.com/mirbehnam/RtlTerminal/releases)
+  [GitHub · Source and releases](https://github.com/cybersec-iq/rtl-terminal)
 
   <br>
 
@@ -40,14 +40,15 @@
 
 ### Rtl Terminal for Windows
 
-**Rtl Terminal** is an open-source Windows terminal emulator created by **behnamapps** for Persian, Arabic and other right-to-left language users. It provides a switchable RTL terminal view while preserving ANSI colors, interactive command-line applications, progress bars, links, Unicode text and standard terminal keyboard input.
+**Rtl Terminal** is an open-source Windows terminal customized and maintained by **AryanIQ**, based on the MIT-licensed upstream project by **behnamapps**, for Persian, Arabic and other right-to-left language users. It provides a switchable RTL terminal view while preserving ANSI colors, interactive command-line applications, progress bars, links, Unicode text and standard terminal keyboard input.
 
 Rtl Terminal uses the Windows ConPTY API and works with command-line environments such as Command Prompt, PowerShell, WSL, Bash, developer tools, package managers and interactive terminal applications.
 
 ### Features
 
 - Open `View` → `Theme...` for the Theme tab in Settings. Browse the unified list with Up/Down to preview locally, then choose Apply to update all terminals. The moon button beside HTML preview switches between dark mode and Gruvbox Light.
-- Pick a ready-made color scheme from Settings → Theme: Campbell, One Half, Solarized, Tango, Dracula, GitHub Dark, Nord, Gruvbox, Tokyo Night and Catppuccin. A scheme sets the default and 16 ANSI colors and switches to its matching theme.
+- Pick a ready-made color scheme from Settings → Theme: AryanIQ Phosphor, Campbell, One Half, Solarized, Tango, Dracula, GitHub Dark, Nord, Gruvbox, Tokyo Night and Catppuccin. A scheme sets the default and 16 ANSI colors and switches to its matching theme.
+- Start with **AryanIQ Phosphor**: black terminal background, phosphor-green default text and classic ANSI colors for shell output.
 - Custom WPF cell renderer with cached visible rows and seamless block/box graphics.
 - Chrome-style tabs, adjacent new-tab button, dark menus and vector window controls.
 - Default terminal font size of 14; existing saved font preferences are retained.
@@ -65,14 +66,16 @@ Rtl Terminal uses the Windows ConPTY API and works with command-line environment
 - Choose a 2,000, 5,000 or 10,000-line scrollback history limit in Font settings.
 - Detect `http://`, `https://` and `www.` links and open them with `Ctrl + Click`.
 - Copy selected text with `Ctrl+C` or `Ctrl+Shift+C`.
+- Select all retained terminal text with `Ctrl+A` or `Ctrl+Shift+A`.
 - Paste text, copied file paths and clipboard images with `Ctrl+V`, `Ctrl+Shift+V` or right-click.
+- In PowerShell, use `Shift+Enter` to add a line without submitting the command. `Ctrl+Z`, `Ctrl+Y` and `Ctrl+X` are passed to the active shell for its own line-editing behavior.
 - Drop files, folders, images or text onto a terminal pane to paste into that pane, including when another pane is active. File paths are quoted for its shell. WSL uses `wslpath` in the pane’s pinned distribution, honoring custom mount roots; paths from another WSL distribution are rejected instead of silently redirected.
 - Advertise 24-bit color with `COLORTERM=truecolor` (also forwarded into WSL), so applications do not fall back to 256 colors. Capabilities are added only to each child environment; the application’s own environment is unchanged.
 - Send `Ctrl+C` as an interrupt when no text is selected.
 - Select any installed Windows font, font size, weight and italic style.
 - Render ANSI bold and italic styles produced by terminal applications.
 - Show recommended terminal and programming fonts when installed.
-- Optionally add **Open in RtlTerminal** to the Windows folder context menu.
+- Optionally add **Open in AryanIQ Rtl Terminal** to the Windows folder context menu.
 - Open a terminal directly in the selected folder.
 - Remember whether new tabs should use Command Prompt, PowerShell or WSL.
 - Reopen one of the ten most recent Command Prompt directories from the File menu.
@@ -132,8 +135,8 @@ Requirements:
 Clone your published repository, then build it:
 
 ```powershell
-git clone https://github.com/mirbehnam/RtlTerminal.git
-cd RtlTerminal
+git clone https://github.com/cybersec-iq/rtl-terminal.git
+cd rtl-terminal
 dotnet build RtlTerminal.csproj
 ```
 
@@ -170,11 +173,12 @@ release\RtlTerminal-Setup-<version>-x64.exe
 
 ### Automatic GitHub Releases
 
-The only release version is `<Version>` in `RtlTerminal.csproj`. The application, local installer build and GitHub workflow read it automatically. Update that value, commit, and push to `main` to create a GitHub Release:
+The only release version is `<Version>` in `RtlTerminal.csproj`. The application, local installer build and GitHub workflow read it automatically. Update that value, commit, and push a matching `v<version>` tag to create a GitHub Release:
 
 ```powershell
-# Change <Version> in RtlTerminal.csproj, then commit.
-git push origin main
+# Change <Version> in RtlTerminal.csproj, then commit and tag it.
+git tag v<version>
+git push origin v<version>
 ```
 
 The workflow publishes one downloadable release asset:
@@ -190,13 +194,15 @@ The installer includes the self-contained .NET runtime. The workflow can also be
 | Action | Shortcut |
 |---|---|
 | Copy selected text | `Ctrl+C` or `Ctrl+Shift+C` |
+| Select all retained text | `Ctrl+A` or `Ctrl+Shift+A` |
 | Paste clipboard text | `Ctrl+V` or `Ctrl+Shift+V` |
 | Paste copied files or images as paths | `Ctrl+V` or `Ctrl+Shift+V` |
 | Paste with mouse | Right-click when no text is selected |
 | Paste file or image paths by dragging | Drop files or images onto the destination terminal pane |
 | Copy with mouse | Right-click selected text; the selection clears after copying |
 | Open Copy/Paste menu | Context Menu (Apps) key or `Shift+F10`; opens after key release |
-| Select all retained text | `Ctrl+Shift+A` |
+| Add a line in PowerShell without submitting | `Shift+Enter` |
+| Shell-specific undo, redo and cut/edit actions | `Ctrl+Z`, `Ctrl+Y` and `Ctrl+X` |
 | Bypass application mouse capture | Hold `Shift` while selecting or right-clicking |
 | Create a tab using the default profile | `Ctrl+Shift+T` |
 | Switch to the next or previous tab | `Ctrl+Tab` or `Ctrl+Shift+Tab` |
@@ -208,7 +214,7 @@ The installer includes the self-contained .NET runtime. The workflow can also be
 | Change terminal font or history size | `Edit` → `Font settings` |
 | Export the current session | `File` → `Export session` |
 | Check for updates | `Help` → `Check for updates` |
-| Install or remove folder context menu | `Tools` → `Open in RtlTerminal` |
+| Install or remove folder context menu | `Tools` → `Open in AryanIQ Rtl Terminal` |
 
 ### Font Support
 
@@ -232,7 +238,7 @@ Monospaced fonts are recommended for correct terminal alignment.
 
 ### Windows Context Menu
 
-On first launch, Rtl Terminal can optionally add **Open in RtlTerminal** for folders and folder backgrounds. The integration is registered for the current Windows user and can later be enabled or removed from the `Tools` menu.
+On first launch, Rtl Terminal can optionally add **Open in AryanIQ Rtl Terminal** for folders and folder backgrounds. The integration is registered for the current Windows user and can later be enabled or removed from the `Tools` menu.
 
 On Windows 11, the current registry integration may appear under **Show more options**. Native placement in the modern Windows 11 context menu requires a packaged shell extension.
 
@@ -271,9 +277,10 @@ See [renderer architecture and verification notes](docs/renderer.md).
 ### Project Information
 
 - Product: **Rtl Terminal**
-- Brand: **behnamapps**
-- Developer: **behnam tajadini**
-- YouTube: **aka_techno**
+- Customized by: **AryanIQ**
+- GitHub: **https://github.com/cybersec-iq/rtl-terminal**
+- Instagram: **@AryanIQ**
+- Upstream credit: **behnamapps / RtlTerminal (MIT License)**
 - Technology: **C# · .NET 8 · WPF · Windows ConPTY**
 
 ### Contributing
@@ -289,7 +296,7 @@ Bug reports, compatibility reports, pull requests and translations are welcome. 
 
 ### License
 
-No license file is currently included. Add a `LICENSE` file before accepting external contributions or distributing the source under an open-source license.
+The project preserves the original MIT License. Contributions and redistribution must retain its copyright and license notice.
 
 ---
 
@@ -297,7 +304,7 @@ No license file is currently included. Add a `LICENSE` file before accepting ext
 
 ### ترمینال راست‌به‌چپ برای ویندوز
 
-**Rtl Terminal** یک شبیه‌ساز ترمینال متن‌باز برای ویندوز است که توسط برند **behnamapps** برای کاربران فارسی‌زبان، عربی‌زبان و زبان‌های راست‌به‌چپ ساخته شده است. این برنامه با Smart RTL جهت متن فارسی و ترکیبی را خودکار مدیریت می‌کند و شبکهٔ برنامه‌های تمام‌صفحه را حفظ می‌کند و در کنار آن از رنگ‌های ANSI، برنامه‌های تعاملی خط فرمان، نوارهای پیشرفت، لینک‌ها و متن Unicode پشتیبانی می‌کند.
+**Rtl Terminal** یک ترمینال متن‌باز ویندوز است که AryanIQ آن را بر پایهٔ پروژهٔ MIT سازندهٔ اصلی، behnamapps، شخصی‌سازی و نگهداری می‌کند. این برنامه با Smart RTL جهت متن فارسی و ترکیبی را خودکار مدیریت می‌کند و شبکهٔ برنامه‌های تمام‌صفحه را حفظ می‌کند و در کنار آن از رنگ‌های ANSI، برنامه‌های تعاملی خط فرمان، نوارهای پیشرفت، لینک‌ها و متن Unicode پشتیبانی می‌کند.
 
 این برنامه با استفاده از Windows ConPTY می‌تواند محیط‌هایی مانند Command Prompt، PowerShell، WSL، Bash، ابزارهای توسعه، package managerها و برنامه‌های تعاملی ترمینال را اجرا کند.
 
@@ -324,7 +331,7 @@ No license file is currently included. Add a `LICENSE` file before accepting ext
 - تنظیم اندازه، ضخامت و حالت ایتالیک فونت
 - نمایش صحیح Bold و Italic ارسال‌شده توسط برنامه‌های ترمینال
 - نمایش فونت‌های استاندارد ترمینال و برنامه‌نویسی در صورت نصب‌بودن
-- افزودن اختیاری گزینه **Open in RtlTerminal** به منوی راست‌کلیک پوشه‌ها
+- افزودن اختیاری گزینه **Open in AryanIQ Rtl Terminal** به منوی راست‌کلیک پوشه‌ها
 - بازکردن ترمینال مستقیماً در مسیر پوشه انتخاب‌شده
 - به‌خاطرسپردن CMD، پاورشل یا WSL به‌عنوان محیط پیش‌فرض تب جدید
 - دسترسی به ده مسیر اخیر CMD از منوی File
@@ -352,8 +359,8 @@ No license file is currently included. Add a `LICENSE` file before accepting ext
 ابتدا .NET 8 SDK را نصب کنید، سپس:
 
 ```powershell
-git clone https://github.com/mirbehnam/RtlTerminal.git
-cd RtlTerminal
+git clone https://github.com/cybersec-iq/rtl-terminal.git
+cd rtl-terminal
 dotnet build RtlTerminal.csproj
 ```
 
@@ -378,11 +385,11 @@ dotnet publish RtlTerminal.csproj `
 
 ### ساخت خودکار Release در گیت‌هاب
 
-این مخزن با GitHub Actions فقط فایل نصب ویندوز ۶۴ بیتی را در Release قرار می‌دهد. برای انتشار، مقدار `<Version>` را در `RtlTerminal.csproj` تغییر دهید، کامیت کنید و به `main` پوش کنید:
+این مخزن با GitHub Actions فقط فایل نصب ویندوز ۶۴ بیتی را در Release قرار می‌دهد. برای انتشار، مقدار `<Version>` را در `RtlTerminal.csproj` تغییر دهید، کامیت کنید و تگ `v<version>` را پوش کنید:
 
 ```powershell
 # نسخه را در RtlTerminal.csproj تغییر دهید و کامیت کنید.
-git push origin main
+git push origin v<version>
 ```
 
 پس از پایان Workflow، فقط فایل Setup دارای Uninstall در بخش Releases قرار می‌گیرد و برای اجرا به نصب جداگانه .NET نیاز ندارد. اجرای دستی Workflow نیز ریلیز نسخهٔ پروژه را ایجاد یا به‌روزرسانی می‌کند.
@@ -397,7 +404,9 @@ git push origin main
 | چسباندن با ماوس | راست‌کلیک در صورتی که متنی انتخاب نشده باشد |
 | کپی با ماوس | راست‌کلیک روی متن انتخاب‌شده؛ سپس انتخاب پاک می‌شود |
 | بازکردن منوی کپی و Paste | کلید Context Menu یا `Shift+F10`؛ پس از رهاکردن کلید |
-| انتخاب همهٔ متن | `Ctrl+Shift+A` |
+| انتخاب همهٔ متن نگه‌داری‌شده | `Ctrl+A` یا `Ctrl+Shift+A` |
+| رفتن به خط بعد بدون اجرای فرمان در PowerShell | `Shift+Enter` |
+| میانبرهای وابسته به shell برای ویرایش/Undo/Redo | `Ctrl+X`، `Ctrl+Z` و `Ctrl+Y` |
 | انتخاب متن در برنامه‌های دریافت‌کنندهٔ ماوس | نگه‌داشتن `Shift` |
 | ساخت تب با پروفایل پیش‌فرض | `Ctrl+Shift+T` |
 | جابه‌جایی بین تب‌ها | `Ctrl+Tab` یا `Ctrl+Shift+Tab` |
@@ -409,7 +418,7 @@ git push origin main
 | تغییر فونت یا ظرفیت History | منوی `Edit` و گزینه `Font settings` |
 | خروجی‌گرفتن از جلسه | منوی `File` و گزینه `Export session` |
 | بررسی آپدیت | منوی `Help` و گزینه `Check for updates` |
-| مدیریت منوی راست‌کلیک | منوی `Tools` و گزینه `Open in RtlTerminal` |
+| مدیریت منوی راست‌کلیک | منوی `Tools` و گزینه `Open in AryanIQ Rtl Terminal` |
 
 ### مشارکت
 
@@ -417,7 +426,7 @@ git push origin main
 
 ### مجوز
 
-در حال حاضر فایل مجوز در پروژه وجود ندارد. قبل از انتشار پروژه به‌عنوان نرم‌افزار متن‌باز، یک فایل `LICENSE` مناسب اضافه کنید.
+پروژه مجوز MIT سازندهٔ اصلی را حفظ می‌کند. برای بازنشر یا مشارکت، اعلان حق نشر و متن مجوز را نگه دارید.
 
 ---
 
@@ -425,7 +434,7 @@ git push origin main
 
 ### طرفية تدعم العربية واتجاه RTL لنظام Windows
 
-**Rtl Terminal** هو محاكي طرفية مفتوح المصدر لنظام Windows، طوّرته علامة **behnamapps** لمستخدمي اللغة العربية والفارسية واللغات التي تُكتب من اليمين إلى اليسار. يدير البرنامج اتجاه النص العربي والفارسي والمختلط باستخدام Smart RTL مع الحفاظ على شبكة التطبيقات بملء الشاشة مع دعم ألوان ANSI والنصوص Unicode والروابط وأشرطة التقدم وتطبيقات سطر الأوامر التفاعلية.
+**Rtl Terminal** هو محاكي طرفية مفتوح المصدر لنظام Windows، خصصته AryanIQ اعتماداً على مشروع behnamapps الأصلي المرخص بـ MIT. يدير البرنامج اتجاه النص العربي والفارسي والمختلط باستخدام Smart RTL مع الحفاظ على شبكة التطبيقات بملء الشاشة مع دعم ألوان ANSI والنصوص Unicode والروابط وأشرطة التقدم وتطبيقات سطر الأوامر التفاعلية.
 
 يعتمد البرنامج على Windows ConPTY، ويمكنه تشغيل Command Prompt وPowerShell وWSL وBash وأدوات المطورين ومديري الحزم وتطبيقات CLI وTUI.
 
@@ -452,7 +461,7 @@ git push origin main
 - تخصيص حجم الخط ووزنه ونمطه المائل
 - عرض أنماط ANSI العريضة والمائلة الصادرة عن تطبيقات الطرفية
 - عرض خطوط الطرفية والبرمجة المقترحة عند توفرها
-- إضافة خيار **Open in RtlTerminal** إلى قائمة المجلدات
+- إضافة خيار **Open in AryanIQ Rtl Terminal** إلى قائمة المجلدات
 - فتح الطرفية مباشرة داخل المجلد المحدد
 - تذكّر CMD أو PowerShell أو WSL كبيئة افتراضية لعلامات التبويب الجديدة
 - فتح أحد آخر عشرة مجلدات CMD من قائمة File
@@ -480,8 +489,8 @@ git push origin main
 ثبّت .NET 8 SDK ثم نفّذ:
 
 ```powershell
-git clone https://github.com/mirbehnam/RtlTerminal.git
-cd RtlTerminal
+git clone https://github.com/cybersec-iq/rtl-terminal.git
+cd rtl-terminal
 dotnet build RtlTerminal.csproj
 ```
 
@@ -506,11 +515,11 @@ dotnet publish RtlTerminal.csproj `
 
 ### إنشاء Release تلقائياً على GitHub
 
-ينشر GitHub Actions ملف تثبيت Windows x64 فقط. غيّر قيمة `<Version>` في `RtlTerminal.csproj`، ثم احفظ التغيير في commit وادفعه إلى `main`:
+ينشر GitHub Actions ملف تثبيت Windows x64 فقط. غيّر قيمة `<Version>` في `RtlTerminal.csproj`، ثم احفظ التغيير في commit وادفع وسم `v<version>`:
 
 ```powershell
 # غيّر النسخة في RtlTerminal.csproj ثم أنشئ commit.
-git push origin main
+git push origin v<version>
 ```
 
 بعد اكتمال Workflow سيظهر ملف Setup فقط في صفحة Releases، وهو يدعم إزالة التثبيت ولا يحتاج إلى تثبيت .NET بشكل منفصل. التشغيل اليدوي من صفحة Actions ينشئ إصدار نسخة المشروع أو يحدّثه أيضاً.
@@ -525,7 +534,9 @@ git push origin main
 | اللصق بالفأرة | زر الفأرة الأيمن عند عدم تحديد نص |
 | النسخ بالفأرة | النقر الأيمن على النص المحدد ثم إلغاء التحديد |
 | فتح قائمة النسخ واللصق | مفتاح Context Menu أو `Shift+F10` بعد تحرير المفتاح |
-| تحديد كل النص | `Ctrl+Shift+A` |
+| تحديد كل النص المحفوظ | `Ctrl+A` أو `Ctrl+Shift+A` |
+| إضافة سطر في PowerShell دون تنفيذ الأمر | `Shift+Enter` |
+| اختصارات تحرير السطر الخاصة بالـ shell | `Ctrl+X` و`Ctrl+Z` و`Ctrl+Y` |
 | تجاوز التقاط الفأرة | اضغط باستمرار على `Shift` |
 | إنشاء علامة بالبيئة الافتراضية | `Ctrl+Shift+T` |
 | التنقل بين علامات التبويب | `Ctrl+Tab` أو `Ctrl+Shift+Tab` |
@@ -537,7 +548,7 @@ git push origin main
 | تغيير الخط أو حجم السجل | قائمة `Edit` ثم `Font settings` |
 | تصدير الجلسة الحالية | قائمة `File` ثم `Export session` |
 | التحقق من التحديثات | قائمة `Help` ثم `Check for updates` |
-| إدارة قائمة المجلدات | قائمة `Tools` ثم `Open in RtlTerminal` |
+| إدارة قائمة المجلدات | قائمة `Tools` ثم `Open in AryanIQ Rtl Terminal` |
 
 ### المساهمة
 

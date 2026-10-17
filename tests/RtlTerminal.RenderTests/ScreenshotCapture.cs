@@ -48,7 +48,7 @@ internal static class ScreenshotCapture
                 "  \x1b[32m✓\x1b[0m  ANSI colors and cell-based graphics\r\n" +
                 "  \x1b[32m✓\x1b[0m  Logical Unicode selection and copying\r\n\r\n" +
                 "  \x1b[31m████\x1b[33m████\x1b[32m████\x1b[36m████\x1b[34m████\x1b[35m████\x1b[0m\r\n\r\n" +
-                "  https://github.com/mirbehnam/RtlTerminal\r\n" +
+                "  https://github.com/cybersec-iq/rtl-terminal\r\n" +
                 "  Ctrl + Left Click to open link\r\n\r\n" +
                 "  Demo output · Font: Consolas 14 · Smart RTL: on");
             Capture("rtl-terminal-persian-rtl-cli.png",
@@ -65,7 +65,7 @@ internal static class ScreenshotCapture
                 "  │  Paste              Right-click (no selection)│\r\n" +
                 "  │  Context menu       Apps key / Shift+F10     │\r\n" +
                 "  └──────────────────────────────────────────────┘\r\n\r\n" +
-                "  Demo output · https://github.com/mirbehnam/RtlTerminal");
+                "  Demo output · https://github.com/cybersec-iq/rtl-terminal");
 
             const string themeDemo =
                 "\x1b[?25l\r\n\x1b[36m  THEMES  /  ANSI palette\x1b[0m\r\n\r\n" +
@@ -78,7 +78,7 @@ internal static class ScreenshotCapture
                 "  \x1b[97;44m status bar \x1b[0m \x1b[7m inverse \x1b[0m \x1b[2mdim text\x1b[0m \x1b[1mbold\x1b[0m\r\n\r\n" +
                 "  \x1b[32m✓\x1b[0m  Light window chrome, menus and tabs\r\n" +
                 "  \x1b[32m✓\x1b[0m  Readable ANSI colors on a light background\r\n\r\n" +
-                "  https://github.com/mirbehnam/RtlTerminal";
+                "  https://github.com/cybersec-iq/rtl-terminal";
             Capture("rtl-terminal-dark-palette.png", themeDemo);
 
             AppTheme.Apply(AppThemeKind.Light);

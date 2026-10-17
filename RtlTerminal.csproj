@@ -14,13 +14,13 @@
 
     <ApplicationIcon>RtlTerminal.ico</ApplicationIcon>
 
-    <Company>behnamapps</Company>
+    <Company>AryanIQ</Company>
 
-    <Authors>behnam tajadini</Authors>
+    <Authors>AryanIQ</Authors>
 
     <Product>Rtl Terminal</Product>
 
-    <Description>RTL-enabled terminal for Persian language users.</Description>
+    <Description>AryanIQ's phosphor-green Windows terminal with Persian and RTL support.</Description>
 
     <Version>1.1.1</Version>
 

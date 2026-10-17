@@ -59,6 +59,7 @@ public static class AppTheme
     public static ColorScheme? Scheme { get; private set; }
 
     public static bool IsLight => Current == AppThemeKind.Light;
+    private static bool IsPhosphor => Scheme?.Name == "AryanIQ Phosphor";
 
     public static TerminalColor DefaultForeground =>
         Scheme?.DefaultForeground ?? (IsLight ? new(36, 41, 47) : new(230, 230, 230));
@@ -81,14 +82,14 @@ public static class AppTheme
     internal static TerminalColor DefaultAnsiForeground(AppThemeKind theme, int index) =>
         theme == AppThemeKind.Light ? LightForegrounds[index] : ColorScheme.Find("Campbell")!.Text(index);
 
-    public static Color TabAccent => IsLight ? Rgb(15, 118, 110) : Rgb(114, 214, 197);
+    public static Color TabAccent => IsPhosphor ? Rgb(57, 255, 20) : IsLight ? Rgb(15, 118, 110) : Rgb(114, 214, 197);
     public static Color TabIcon => IsLight ? Rgb(101, 109, 118) : Rgb(139, 148, 158);
     public static Color ActiveTabText => IsLight ? Rgb(31, 35, 40) : Rgb(240, 244, 248);
     public static Color InactiveTabText => IsLight ? Rgb(87, 96, 106) : Rgb(165, 174, 184);
     public static Color ActiveTab => IsLight ? Rgb(246, 248, 250) : Rgb(48, 49, 52);
     public static Color HoverTab => IsLight ? Rgb(215, 220, 226) : Rgb(42, 43, 47);
     public static Color TabSeparator => IsLight ? Rgb(175, 184, 193) : Rgb(78, 80, 84);
-    public static Color CursorFill => IsLight ? Color.FromArgb(90, 36, 41, 47) : Color.FromArgb(90, 230, 230, 230);
+    public static Color CursorFill => IsPhosphor ? Color.FromArgb(96, 57, 255, 20) : IsLight ? Color.FromArgb(90, 36, 41, 47) : Color.FromArgb(90, 230, 230, 230);
     public static Color ScrollTrack => IsLight ? Rgb(246, 248, 250) : Rgb(17, 17, 17);
     public static Color ScrollThumb => IsLight ? Rgb(190, 196, 203) : Rgb(85, 85, 85);
     public static Color ScrollThumbHover => IsLight ? Rgb(150, 158, 167) : Rgb(136, 136, 136);
@@ -132,6 +133,14 @@ public static class AppTheme
         Set("RoundButtonHoverBrush", 64, 65, 69, 205, 210, 216);
         Set("RoundButtonPressedBrush", 81, 82, 86, 190, 196, 203);
         Set("RoundButtonFocusBrush", 69, 79, 96, 196, 214, 240);
+
+        if (IsPhosphor)
+        {
+            resources["AccentBrush"] = Frozen(Rgb(57, 255, 20));
+            resources["FocusBrush"] = Frozen(Rgb(57, 255, 20));
+            resources["TerminalBackgroundBrush"] = Frozen(Rgb(0, 0, 0));
+            resources["TerminalForegroundBrush"] = Frozen(Rgb(57, 255, 20));
+        }
 
         if (scheme is not null)
         {
