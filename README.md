@@ -49,6 +49,7 @@ Rtl Terminal uses the Windows ConPTY API and works with command-line environment
 - Open `View` → `Theme...` for the Theme tab in Settings. Browse the unified list with Up/Down to preview locally, then choose Apply to update all terminals. The moon button beside HTML preview switches between dark mode and Gruvbox Light.
 - Pick a ready-made color scheme from Settings → Theme: AryanIQ Phosphor, Campbell, One Half, Solarized, Tango, Dracula, GitHub Dark, Nord, Gruvbox, Tokyo Night and Catppuccin. A scheme sets the default and 16 ANSI colors and switches to its matching theme.
 - Start with **AryanIQ Phosphor**: black terminal background, phosphor-green default text and classic ANSI colors for shell output.
+- Use the custom AryanIQ phosphor-green terminal app icon on the window and installer.
 - Custom WPF cell renderer with cached visible rows and seamless block/box graphics.
 - Chrome-style tabs, adjacent new-tab button, dark menus and vector window controls.
 - Default terminal font size of 14; existing saved font preferences are retained.
