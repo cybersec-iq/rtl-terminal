@@ -286,7 +286,7 @@ internal static partial class Program
             throw new Exception("Blank or hidden text was detected as a link");
         var factory = typeof(MainWindow).GetMethod("CreateTerminalContextMenu", flags)!;
         var menu = (System.Windows.Controls.ContextMenu)factory.Invoke(window, null)!;
-        if (menu.Items.Count != 8 || ((System.Windows.Controls.MenuItem)menu.Items[0]).IsEnabled)
+        if (menu.Items.Count != 9 || ((System.Windows.Controls.MenuItem)menu.Items[0]).IsEnabled)
             throw new Exception("Context menu copy state is incorrect without selection");
         view.SelectAll();
         menu = (System.Windows.Controls.ContextMenu)factory.Invoke(window, null)!;
