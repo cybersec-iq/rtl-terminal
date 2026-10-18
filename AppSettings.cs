@@ -18,12 +18,14 @@ public static class AppSettings
 
     public static string? LoadTerminalProfile()
     {
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RTLTERMINAL_DATA_DIR"))) return null;
         using var key = Registry.CurrentUser.OpenSubKey(SettingsKey);
         return key?.GetValue("TerminalProfile") as string;
     }
 
     public static void SaveTerminalProfile(string profile)
     {
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RTLTERMINAL_DATA_DIR"))) return;
         using var key = Registry.CurrentUser.CreateSubKey(SettingsKey);
         key.SetValue("TerminalProfile", profile, RegistryValueKind.String);
     }

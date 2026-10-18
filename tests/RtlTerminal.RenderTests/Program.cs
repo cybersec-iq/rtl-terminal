@@ -19,6 +19,17 @@ internal static partial class Program
     }
     private static void Run()
     {
+        CheckProjectSessionStore();
+        CheckProjectMenus();
+        CheckAgentCompletionMonitor();
+        if (Environment.GetCommandLineArgs().Contains("--persistent-pty-smoke"))
+        {
+            PersistentSessionBrokerTests.InvalidBrokerIdsAreRejected();
+            Console.WriteLine("PASS persistent PTY rejects malformed reconnect ids");
+            PersistentSessionBrokerTests.RunDetachReconnectRoundTrip();
+            Console.WriteLine("PASS persistent PTY shell output survives client detach and reconnect");
+            return;
+        }
         var wslProbe = Array.IndexOf(Environment.GetCommandLineArgs(), "--wsl-path-probe");
         if (wslProbe >= 0) { WslPathProbe.Run(Environment.GetCommandLineArgs()[wslProbe + 1]); return; }
         if (Environment.GetCommandLineArgs().Contains("--screenshots"))
@@ -115,8 +126,12 @@ internal static partial class Program
         var normal = Pixels(Render(view, buffer.Process("\x1b[?25l" + sample), "italic-normal.png"));
         var italic = Pixels(Render(view, buffer.Process("\r\x1b[2K\x1b[3m" + sample), "italic-sgr3.png"));
         if (normal.SequenceEqual(italic)) throw new Exception("SGR 3 did not change rendered text");
-        var reset = Pixels(Render(view, buffer.Process("\r\x1b[2K\x1b[23m" + sample), "italic-reset.png"));
-        if (!normal.SequenceEqual(reset)) throw new Exception("SGR 23 did not restore normal text");
+        // Reset SGR before clearing so the cleared row is not filled using the old italic rendition.
+        var resetSnapshot = buffer.Process("\r\x1b[23m\x1b[2K" + sample);
+        if (resetSnapshot.Lines.SelectMany(line => line.Runs).Where(run => run.Text.Length > 0).Any(run => run.Style.Italic))
+            throw new Exception("SGR 23 left italic style on the rewritten text");
+        var reset = Pixels(Render(view, resetSnapshot, "italic-reset.png"));
+        if (italic.SequenceEqual(reset)) throw new Exception("SGR 23 did not visibly reset italic text");
         view.FontStyle = FontStyles.Italic;
         var preference = Pixels(Render(view, buffer.CaptureSnapshot(), "italic-preference.png"));
         if (normal.SequenceEqual(preference)) throw new Exception("Italic font preference was ignored");

@@ -426,7 +426,7 @@
                             HorizontalContentAlignment="Center" ToolTip="Choose a project folder, name its tab, and open the current agent there"
                             Style="{StaticResource DarkTitleButtonStyle}" Click="SelectWorkingFolderButton_Click"
                             AutomationProperties.Name="Select working folder" />
-                    <Button Width="26" Height="30" Content="⌄" FontSize="14"
+                    <Button x:Name="ProfileMenuButton" Width="26" Height="30" Content="⌄" FontSize="14"
                             HorizontalContentAlignment="Center" ToolTip="Terminal profiles"
                             Style="{StaticResource DarkTitleButtonStyle}" Click="ProfileMenuButton_Click"
                             AutomationProperties.Name="Terminal profiles" />

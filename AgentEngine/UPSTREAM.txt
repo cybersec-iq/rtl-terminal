@@ -1,0 +1,24 @@
+Copied from:
+C:\Users\arian\Desktop\my project\X project\components\XAgent-Runtime
+
+The upstream files were copied into this repository; the source checkout was not edited.
+The bundled copies have these local integration changes:
+- xagent.js: accepts the per-session project-root list and launches supported CLIs from the first saved path.
+- xagent.js: stores explicitly supplied native conversation IDs in a per-runtime host-session-state.json, keyed by project session, CLI, provider, and profile; resumes require the matching registered adapter and ID. The launcher does not discover or verify whether an ID exists at the provider.
+- xagent.js: exposes an explicit transcript handoff formatter for cross-provider switching. This is a portable text archive, not a native-session transfer, and callers must present it to the new agent explicitly.
+- xagent.js: reads XAGENT_PROJECT_SESSION_ID; Claude Code uses its documented --session-id UUID on first launch and --resume for later launches, with the ID saved in the session runtime. Other CLIs without a documented deterministic create+resume pair show as text-handoff-only.
+- xagent.js: shows the saved handoff file in the main menu and opens it in the system text editor. The host may set XAGENT_TRANSCRIPT_HANDOFF_FILE; otherwise the engine expects handoff/<project-session-id>.md in its runtime folder.
+- registry.json: declares Claude Code's additional-directory switch alongside the existing Codex setting.
+- route-ui.js, route-hub.js, and generic-broker.js remain byte-identical to upstream.
+
+Files copied:
+- xagent.js
+- route-ui.js
+- route-hub.js
+- generic-broker.js
+- registry.json
+
+The source files remain in the X project. Runtime settings, provider account data,
+session records, workspaces, and credentials were not copied. Rtl Terminal deploys
+these engine files into its per-user LocalAppData folder so the engine can keep
+its own writable state without changing the source checkout or Program Files.

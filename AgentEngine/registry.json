@@ -1,0 +1,573 @@
+{
+  "$comment": "X Agent CLI registry. cmd: candidates tried in order via where.exe. tier: free-fcm | free-tier | paid | byok | mixed | unknown (cost label; never 'free' without evidence). loginCmd: OFFICIAL interactive login (user completes it in the browser). install: OFFICIAL method only. hidden: kept for history, not shown in the active UI.",
+  "agents": [
+    {
+      "id": "opencode",
+      "name": "OpenCode",
+      "host": { "resumeArgs": ["--session", "{SESSION}"] },
+      "cmd": [
+        "opencode"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "own config (opencode auth.json)",
+      "tier": "mixed",
+      "tierNote": "free via FCM; your other providers may be paid",
+      "usage": "opencode stats (local statistics)",
+      "mcpList": "opencode mcp list",
+      "site": "https://opencode.ai",
+      "install": null
+    },
+    {
+      "id": "claude",
+      "name": "Claude Code",
+      "host": {
+        "profileMode": "claude-config",
+        "loginArgs": ["auth", "login"],
+        "createSessionArgs": ["--session-id", "{SESSION}"],
+        "resumeArgs": ["--resume", "{SESSION}"],
+        "addDirFlag": "--add-dir",
+        "authEnv": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"],
+        "profileNote": "Official CLAUDE_CONFIG_DIR for claude.ai accounts; Console login without API key is not independently isolated",
+        "docs": "https://code.claude.com/docs/en/cli-usage"
+      },
+      "cmd": [
+        "claude"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "Anthropic OAuth (claude.ai)",
+      "tier": "paid",
+      "tierNote": "subscription",
+      "usage": "/usage inside Claude Code",
+      "mcpList": "claude mcp list",
+      "loginCmd": "claude",
+      "site": "https://claude.com/claude-code",
+      "install": null,
+      "verifyCmd": "claude -p \"Reply only with the word OK\" --no-session-persistence",
+      "verifyTimeout": 90
+    },
+    {
+      "id": "codex",
+      "name": "OpenAI Codex CLI",
+      "host": {
+        "profileMode": "codex-home",
+        "loginArgs": ["login"],
+        "resumeArgs": ["resume", "{SESSION}"],
+        "addDirFlag": "--add-dir",
+        "authEnv": ["OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY", "CODEX_AUTH_TOKEN"],
+        "docs": "https://developers.openai.com/codex/config-advanced/"
+      },
+      "cmd": [
+        "codex"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "ChatGPT login",
+      "tier": "paid",
+      "tierNote": "ChatGPT plan",
+      "usage": "/status inside Codex",
+      "mcpList": "codex mcp list",
+      "loginCmd": "codex login",
+      "site": "https://developers.openai.com/codex/cli",
+      "install": null,
+      "verifyCmd": "codex exec --skip-git-repo-check --ephemeral \"Reply only with the word OK\"",
+      "verifyTimeout": 90
+    },
+    {
+      "id": "cursor-agent",
+      "name": "Cursor Agent",
+      "host": { "loginArgs": ["login"] },
+      "cmd": [
+        "cursor-agent"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "Cursor account",
+      "tier": "free-tier",
+      "tierNote": "Cursor plan quota",
+      "usage": "cursor.com dashboard",
+      "loginCmd": "cursor-agent login",
+      "site": "https://cursor.com/agent-cli",
+      "install": "irm https://cursor.com/install.ps1 | iex",
+      "verifyCmd": "cursor-agent -p \"Reply only with the word OK\" --output-format text --trust",
+      "verifyTimeout": 120
+    },
+    {
+      "id": "zcode",
+      "name": "Z Code (Z.ai)",
+      "cmd": [
+        "zcode"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "Z.ai account (inside app)",
+      "tier": "unknown",
+      "usage": "inside Z Code",
+      "site": "https://z.ai",
+      "install": null,
+      "verifyCmd": "zcode -p \"Reply only with the word OK\"",
+      "verifyTimeout": 120
+    },
+    {
+      "id": "agy",
+      "name": "Antigravity CLI (agy)",
+      "cmd": [
+        "agy"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "Google account (Windows Credential Manager, one login per Windows user)",
+      "tier": "free-tier",
+      "tierNote": "Google tier quota; AI Credits shown in Usage",
+      "usage": "agy -p /usage (official, 0 tokens)",
+      "mcpList": "agy mcp list",
+      "site": "https://antigravity.google",
+      "install": "irm https://antigravity.google/cli/install.ps1 | iex",
+      "verifyCmd": "agy -p \"/usage\" --output-format json --print-timeout 40s",
+      "verifyOkRe": "remaining_fraction",
+      "verifyLabel": "authenticated, service reachable (agy /usage, 0 tokens)"
+    },
+    {
+      "id": "qwen",
+      "name": "Qwen Code",
+      "cmd": [
+        "qwen"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "free Qwen OAuth discontinued; OpenAI-compatible provider",
+      "tier": "byok",
+      "tierNote": "can run free through local FCM (env only, no config written)",
+      "site": "https://github.com/QwenLM/qwen-code",
+      "install": "npm install -g @qwen-code/qwen-code",
+      "fcm": {
+        "args": [
+          "--auth-type",
+          "openai"
+        ],
+        "env": {
+          "OPENAI_BASE_URL": "{BASE}",
+          "OPENAI_API_KEY": "fcm-local-no-key",
+          "OPENAI_MODEL": "fcm"
+        },
+        "test": [
+          "--auth-type",
+          "openai",
+          "-p",
+          "Reply only with the word OK"
+        ],
+        "replaceArgs": true
+      },
+      "fcmDefault": true
+    },
+    {
+      "id": "kimi",
+      "name": "Kimi Code CLI",
+      "cmd": [
+        "kimi"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "Kimi device-code login",
+      "tier": "unknown",
+      "loginCmd": "kimi login",
+      "site": "https://github.com/MoonshotAI/kimi-code",
+      "install": "irm https://code.kimi.com/kimi-code/install.ps1 | iex",
+      "verifyCmd": "kimi -p \"Reply only with the word OK\"",
+      "verifyTimeout": 120
+    },
+    {
+      "id": "crush",
+      "name": "Crush",
+      "cmd": [
+        "crush"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "provider login / BYOK",
+      "tier": "byok",
+      "loginCmd": "crush login",
+      "site": "https://github.com/charmbracelet/crush",
+      "install": "npm install -g @charmland/crush",
+      "fcm": {
+        "args": [],
+        "env": {},
+        "test": [
+          "run",
+          "Reply only with the word OK"
+        ],
+        "replaceArgs": true,
+        "configFiles": [
+          "~/.config/crush/crush.json"
+        ]
+      },
+      "tierNote": "FCM provider set as default in ~/.config/crush/crush.json (R4, no key)"
+    },
+    {
+      "id": "kilo",
+      "name": "Kilo Code",
+      "cmd": [
+        "kilo"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "Kilo account / providers (kilo auth)",
+      "tier": "unknown",
+      "loginCmd": "kilo auth",
+      "site": "https://kilo.ai",
+      "install": "npm install -g @kilocode/cli",
+      "verifyCmd": "kilo run \"Reply only with the word OK\"",
+      "fcm": {
+        "args": [
+          "-m",
+          "fcm/fcm"
+        ],
+        "env": {},
+        "test": [
+          "run",
+          "-m",
+          "fcm/fcm",
+          "Reply only with the word OK"
+        ],
+        "replaceArgs": true,
+        "configFiles": [
+          "~/.config/kilo/kilo.jsonc"
+        ]
+      },
+      "fcmDefault": true,
+      "verifyTimeout": 120
+    },
+    {
+      "id": "aider",
+      "name": "Aider",
+      "cmd": [
+        "aider"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "BYOK env/config",
+      "tier": "byok",
+      "site": "https://aider.chat",
+      "install": "python -m pip install aider-install && aider-install",
+      "fcm": {
+        "args": [
+          "--model",
+          "openai/fcm",
+          "--openai-api-base",
+          "{BASE}",
+          "--no-show-model-warnings"
+        ],
+        "env": {
+          "OPENAI_API_KEY": "fcm-local-no-key"
+        },
+        "test": [
+          "--message",
+          "Reply only with the word OK",
+          "--no-git",
+          "--yes-always",
+          "--no-check-update",
+          "--analytics-disable",
+          "--no-stream"
+        ]
+      },
+      "fcmDefault": true
+    },
+    {
+      "id": "mini",
+      "name": "mini-SWE-agent",
+      "cmd": [
+        "mini",
+        "mini-swe-agent"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "BYOK env (litellm)",
+      "tier": "byok",
+      "site": "https://github.com/SWE-agent/mini-swe-agent",
+      "install": "uv tool install mini-swe-agent",
+      "fcm": {
+        "args": [
+          "-m",
+          "openai/fcm"
+        ],
+        "env": {
+          "OPENAI_API_BASE": "{BASE}",
+          "OPENAI_API_KEY": "fcm-local-no-key",
+          "MSWEA_COST_TRACKING": "ignore_errors"
+        },
+        "verifyPy": {
+          "python": "%APPDATA%\\uv\\tools\\mini-swe-agent\\Scripts\\python.exe",
+          "code": "import os,litellm; r=litellm.completion(model='openai/fcm',messages=[{'role':'user','content':'Reply only with the word OK'}],api_base=os.environ['OPENAI_API_BASE'],api_key=os.environ['OPENAI_API_KEY'],max_tokens=16,timeout=45); print(r.choices[0].message.content)",
+          "label": "model path via mini's own litellm (TUI needs a console: INTERACTIVE_REQUIRED)"
+        }
+      },
+      "fcmDefault": true
+    },
+    {
+      "id": "cline",
+      "name": "Cline CLI",
+      "cmd": [
+        "cline"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "Cline account / provider (cline auth)",
+      "tier": "unknown",
+      "loginCmd": "cline auth",
+      "site": "https://cline.bot",
+      "install": "npm install -g cline",
+      "verifyCmd": "cline \"Reply only with the word OK\"",
+      "verifyTimeout": 120
+    },
+    {
+      "id": "cn",
+      "name": "Continue CLI (cn)",
+      "cmd": [
+        "cn"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "Continue account / BYOK",
+      "tier": "byok",
+      "site": "https://docs.continue.dev",
+      "install": "npm install -g @continuedev/cli",
+      "fcm": {
+        "args": [
+          "--config",
+          "{CNCFG}"
+        ],
+        "env": {},
+        "test": [
+          "--config",
+          "{CNCFG}",
+          "-p",
+          "Reply only with the word OK"
+        ],
+        "replaceArgs": true
+      },
+      "tierNote": "FCM via X Agent-owned config (provider-configs/continue-fcm.yaml); your ~/.continue untouched",
+      "fcmDefault": true,
+      "verifyTimeout": 120
+    },
+    {
+      "id": "copilot",
+      "name": "GitHub Copilot CLI",
+      "cmd": [
+        "copilot"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "GitHub login (copilot login)",
+      "tier": "free-tier",
+      "tierNote": "included in Copilot Free (monthly quota)",
+      "usage": "/usage inside Copilot CLI",
+      "loginCmd": "copilot login",
+      "site": "https://github.com/features/copilot/cli",
+      "install": "npm install -g @github/copilot",
+      "note": "uses PowerShell 7 (pwsh, installed per-user in R4) for its shell tool",
+      "verifyCmd": "copilot -p \"Reply only with the word OK\"",
+      "verifyTimeout": 120
+    },
+    {
+      "id": "kiro",
+      "name": "Kiro CLI",
+      "cmd": [
+        "kiro-cli"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "kiro-cli login (Google/GitHub/Builder ID)",
+      "tier": "free-tier",
+      "loginCmd": "kiro-cli login",
+      "site": "https://kiro.dev/docs/cli/",
+      "install": "irm https://cli.kiro.dev/install.ps1 | iex",
+      "installNote": "official per-user MSI (manifest-verified, AWS-signed) into %LOCALAPPDATA%Kiro-Cli — no UAC (verified 2.28.0)",
+      "verifyCmd": "kiro-cli chat --no-interactive \"Reply only with the word OK\"",
+      "verifyTimeout": 120
+    },
+    {
+      "id": "goose",
+      "name": "Goose",
+      "cmd": [
+        "goose"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "provider config (goose configure)",
+      "tier": "byok",
+      "loginCmd": "goose configure",
+      "site": "https://github.com/aaif-goose/goose",
+      "install": "official script https://raw.githubusercontent.com/aaif-goose/goose/main/download_cli.ps1 (never winget Pressly.Goose)",
+      "fcm": {
+        "args": [
+          "session"
+        ],
+        "env": {
+          "GOOSE_PROVIDER": "openai",
+          "GOOSE_MODEL": "fcm",
+          "OPENAI_HOST": "{HOST}",
+          "OPENAI_API_KEY": "fcm-local-no-key"
+        },
+        "test": [
+          "run",
+          "--no-session",
+          "-t",
+          "Reply only with the word OK"
+        ],
+        "replaceArgs": true
+      },
+      "fcmDefault": true
+    },
+    {
+      "id": "interpreter",
+      "name": "Open Interpreter",
+      "cmd": [
+        "interpreter"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "provider via /model in the TUI",
+      "tier": "byok",
+      "site": "https://github.com/openinterpreter/openinterpreter",
+      "install": "irm https://www.openinterpreter.com/install.ps1 | iex",
+      "fcm": {
+        "args": [
+          "-c",
+          "model_provider=fcm",
+          "-c",
+          "model_providers.fcm.name=FCM",
+          "-c",
+          "model_providers.fcm.base_url={BASE}",
+          "-c",
+          "model_providers.fcm.env_key=FCM_LOCAL_KEY",
+          "-c",
+          "model_providers.fcm.wire_api=chat",
+          "-m",
+          "fcm"
+        ],
+        "env": {
+          "FCM_LOCAL_KEY": "fcm-local-no-key"
+        },
+        "test": [
+          "exec",
+          "--skip-git-repo-check",
+          "{ARGS}",
+          "Reply only with the word OK"
+        ],
+        "argsAfterTest": false
+      },
+      "fcmDefault": true
+    },
+    {
+      "id": "hermes",
+      "name": "Hermes Agent",
+      "cmd": [
+        "hermes"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "provider setup (hermes setup / hermes model)",
+      "tier": "byok",
+      "loginCmd": "hermes model",
+      "site": "https://hermes-agent.nousresearch.com",
+      "install": "iex (irm https://hermes-agent.nousresearch.com/install.ps1)",
+      "note": "default model in Hermes config uses your Copilot login (premium). X Agent FCM path: hermes chat --provider custom:fcm -m fcm",
+      "fcm": {
+        "args": [
+          "chat",
+          "--provider",
+          "custom:fcm",
+          "-m",
+          "fcm"
+        ],
+        "env": {},
+        "test": [
+          "-z",
+          "Reply only with the word OK",
+          "--provider",
+          "custom:fcm",
+          "-m",
+          "fcm"
+        ],
+        "replaceArgs": true,
+        "configFiles": [
+          "%LOCALAPPDATA%/hermes/config.yaml"
+        ]
+      },
+      "verifyTimeout": 120
+    },
+    {
+      "id": "gemini",
+      "name": "Gemini CLI (legacy)",
+      "cmd": [
+        "gemini"
+      ],
+      "versionArgs": [
+        "--version"
+      ],
+      "auth": "Google OAuth",
+      "tier": "unknown",
+      "hidden": true,
+      "legacyReason": "personal Gemini Code Assist path moved to Antigravity; removed from active menus by user request (binary, profiles and logins untouched)",
+      "site": "https://geminicli.com",
+      "install": null
+    }
+  ],
+  "external": [
+    {
+      "id": "manus",
+      "name": "Manus (Cloud)",
+      "url": "https://manus.im",
+      "reason": "No official standalone local CLI"
+    },
+    {
+      "id": "replit",
+      "name": "Replit Agent (Cloud)",
+      "url": "https://replit.com",
+      "reason": "No official standalone local CLI"
+    },
+    {
+      "id": "warp",
+      "name": "Warp (Agent Terminal)",
+      "url": "https://www.warp.dev",
+      "reason": "Warp is a terminal app, not a standalone agent CLI"
+    }
+  ],
+  "advancedWsl": [
+    {
+      "id": "plandex",
+      "name": "Plandex",
+      "reason": "Linux/macOS/WSL per official docs"
+    },
+    {
+      "id": "amp",
+      "name": "Amp",
+      "reason": "Windows native not established; WSL path"
+    },
+    {
+      "id": "openhands",
+      "name": "OpenHands",
+      "reason": "Docker/WSL oriented"
+    }
+  ]
+}

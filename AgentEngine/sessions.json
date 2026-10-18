@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "sessions": [
+    {
+      "id": "s1",
+      "name": "Session 1",
+      "conversationId": null,
+      "cwd": null,
+      "createdAt": "2026-10-18T22:12:40.819Z",
+      "lastUsed": null
+    },
+    {
+      "id": "s2",
+      "name": "Session 2",
+      "conversationId": null,
+      "cwd": null,
+      "createdAt": "2026-10-18T22:12:40.819Z",
+      "lastUsed": null
+    },
+    {
+      "id": "s3",
+      "name": "Session 3",
+      "conversationId": null,
+      "cwd": null,
+      "createdAt": "2026-10-18T22:12:40.819Z",
+      "lastUsed": null
+    },
+    {
+      "id": "s4",
+      "name": "Session 4",
+      "conversationId": null,
+      "cwd": null,
+      "createdAt": "2026-10-18T22:12:40.819Z",
+      "lastUsed": null
+    },
+    {
+      "id": "s5",
+      "name": "Session 5",
+      "conversationId": null,
+      "cwd": null,
+      "createdAt": "2026-10-18T22:12:40.819Z",
+      "lastUsed": null
+    },
+    {
+      "id": "s6",
+      "name": "Session 6",
+      "conversationId": null,
+      "cwd": null,
+      "createdAt": "2026-10-18T22:12:40.819Z",
+      "lastUsed": null
+    }
+  ]
+}

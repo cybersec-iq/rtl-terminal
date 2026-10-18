@@ -14,6 +14,13 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        if (Environment.GetCommandLineArgs().Contains("--rtl-pty-broker", StringComparer.Ordinal))
+        {
+            PersistentConPtySession.DispatchBrokerProcess();
+            Shutdown();
+            return;
+        }
+
         if (!OperatingSystem.IsWindowsVersionAtLeast(
                 major: 10,
                 minor: 0,

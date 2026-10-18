@@ -16,7 +16,7 @@ namespace RtlTerminal;
 
 
 
-public sealed class ConPtySession : IDisposable
+public sealed class ConPtySession : ITerminalTransport
 
 {
 
@@ -57,6 +57,15 @@ private const int PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
     private PROCESS_INFORMATION _processInfo;
 
     private bool _disposed;
+
+    public bool IsProcessRunning
+    {
+        get
+        {
+            if (_processInfo.hProcess == IntPtr.Zero) return false;
+            return GetExitCodeProcess(_processInfo.hProcess, out var exitCode) && exitCode == 259;
+        }
+    }
 
     public bool HasCodexProcess => _processInfo.dwProcessId != 0 &&
         ProcessTree.HasDescendantNamed(_processInfo.dwProcessId, "codex");
@@ -320,6 +329,9 @@ private const int PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
     [DllImport("kernel32.dll", SetLastError = true)]
 
     private static extern bool CloseHandle(IntPtr hObject);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetExitCodeProcess(IntPtr hProcess, out uint lpExitCode);
 
 
 

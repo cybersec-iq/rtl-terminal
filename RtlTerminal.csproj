@@ -22,7 +22,7 @@
 
     <Description>AryanIQ's phosphor-green Windows terminal with Persian and RTL support.</Description>
 
-    <Version>1.1.4</Version>
+    <Version>1.1.5</Version>
 
     <Nullable>enable</Nullable>
 
@@ -35,6 +35,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Content Include="AgentEngine\**\*" Link="AgentEngine\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.31" />
     <PackageReference Include="Microsoft.Windows.Console.ConPTY" Version="1.25.260930003" GeneratePathProperty="true" ExcludeAssets="build;runtime;native" />
     <Content Include="$(PkgMicrosoft_Windows_Console_ConPTY)/runtimes/win-x64/native/conpty.dll" Link="ConPty/x64/conpty.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
     <Content Include="$(PkgMicrosoft_Windows_Console_ConPTY)/build/native/runtimes/x64/OpenConsole.exe" Link="ConPty/x64/OpenConsole.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
