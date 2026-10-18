@@ -17,6 +17,7 @@
 - نسخهٔ جدید: `C:\Users\arian\AppData\Local\Programs\AryanIQ\Rtl Terminal 1.1.4\RtlTerminal.exe`.
 - پشتیبان کامل نسخهٔ قبلی: `C:\Users\arian\AppData\Local\AryanIQ\Rtl Terminal Backups\1.1.2-before-1.1.4`; هش exe و شمار فایل‌ها با اصل برابر بود.
 - میانبر Start Menu مخصوص کاربر به exe جدید و آیکون تعبیه‌شدهٔ آن اشاره می‌کند؛ میانبر و نصب سیستم قبلی تغییر نکردند.
+- سنجاق Taskbar کاربر به exe جدید تغییر کرد؛ فایل میانبر سنجاق‌شدهٔ قبلی در پوشهٔ پشتیبان حفظ شد.
 
 ## ممیزی و تغییرات
 
