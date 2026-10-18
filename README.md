@@ -57,6 +57,9 @@ Rtl Terminal uses the Windows ConPTY API and works with command-line environment
 - Display Persian, Arabic, English and mixed Unicode terminal output.
 - Support ANSI standard colors, bright colors, dim text, 256 colors and RGB colors.
 - Run interactive CLI and TUI applications through Windows ConPTY.
+- Toggle Codex CLI voice mode from the toolbar with one button; it sends `/voice` and `/voice stop` to the active Codex session.
+- Copy the latest completed Codex response with the toolbar's **Copy report** button (the native `Ctrl+O` action).
+- Send an image already on the clipboard to an image-aware interactive CLI with `Ctrl+Alt+V`, which forwards the native paste key instead of inserting a temporary file path.
 - Open multiple Command Prompt, PowerShell and WSL sessions in independent tabs.
 - Switch tabs with `Ctrl+Tab`, create a tab with `Ctrl+Shift+T` and close the active pane (or its last tab) with `Ctrl+Shift+W`.
 - Right-click a tab and choose **Split tab** to split that tab, or **Color...** to choose its background color (including a custom color or reset).
@@ -78,6 +81,8 @@ Rtl Terminal uses the Windows ConPTY API and works with command-line environment
 - Show recommended terminal and programming fonts when installed.
 - Optionally add **Open in AryanIQ Rtl Terminal** to the Windows folder context menu.
 - Open a terminal directly in the selected folder.
+- Use **Select** beside the new-tab button to choose a working folder, name the project tab and open a new tab there. If the active terminal is running Codex CLI or Claude Code, the same agent starts in the new folder.
+- Rename a tab from its right-click menu; the custom label stays with that open tab.
 - Remember whether new tabs should use Command Prompt, PowerShell or WSL.
 - Reopen one of the ten most recent Command Prompt directories from the File menu.
 - Export the retained content of the current terminal session to a UTF-8 text file.
@@ -206,6 +211,7 @@ The installer includes the self-contained .NET runtime. The workflow can also be
 | Shell-specific undo, redo and cut/edit actions | `Ctrl+Z`, `Ctrl+Y` and `Ctrl+X` |
 | Bypass application mouse capture | Hold `Shift` while selecting or right-clicking |
 | Create a tab using the default profile | `Ctrl+Shift+T` |
+| Select a folder for a new tab | `Select` beside `+` |
 | Switch to the next or previous tab | `Ctrl+Tab` or `Ctrl+Shift+Tab` |
 | Close the active pane or its last tab | `Ctrl+Shift+W` |
 | Interrupt the active command | `Ctrl+C` when no text is selected |
@@ -317,6 +323,9 @@ The project preserves the original MIT License. Contributions and redistribution
 - نمایش متن فارسی، عربی، انگلیسی و متن‌های ترکیبی
 - پشتیبانی از رنگ‌های ANSI، رنگ‌های روشن، متن کم‌رنگ، ۲۵۶ رنگ و RGB
 - اجرای برنامه‌های CLI و TUI تعاملی
+- Voice Codex CLI با یک دکمه روشن/خاموش می‌شود و از خود Codex برای دریافت گفتار استفاده می‌کند.
+- پاسخ کامل‌شدهٔ اخیر Codex با دکمهٔ `Copy report` یا میان‌بر بومی `Ctrl+O` کپی می‌شود.
+- ارسال تصویر کلیپ‌بورد به CLI تصویری با `Ctrl+Alt+V` و فرستادن کلید Paste خام، بدون درج مسیر فایل موقت.
 - اجرای هم‌زمان Command Prompt، PowerShell و WSL در تب‌های مستقل
 - ساخت، جابه‌جایی و بستن تب‌ها با میان‌برهای صفحه‌کلید
 - پشتیبانی از progress bar و بازنویسی خروجی روی همان خط

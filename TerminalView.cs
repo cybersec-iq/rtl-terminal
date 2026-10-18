@@ -26,6 +26,9 @@ public sealed class TerminalView : ContentControl
     internal static readonly Regex Links = new(@"(?i)\b(?:https?://|www\.)[^\s<>{}\[\]""']+", RegexOptions.Compiled);
     public event Action<Uri>? LinkRequested;
     public bool HasSelection => _anchor is not null && _end is not null && _anchor != _end;
+    public bool IsAllSelected => _snapshot is { Lines.Count: > 0 } snapshot &&
+        (_anchor == (0, 0) && _end == (snapshot.Lines.Count - 1, Text(snapshot.Lines[^1]).Length) ||
+         _end == (0, 0) && _anchor == (snapshot.Lines.Count - 1, Text(snapshot.Lines[^1]).Length));
     public bool IsSelecting => _dragging;
     public double VerticalOffset => _scroll.VerticalOffset;
     public double ViewportWidth => _scroll.ViewportWidth;

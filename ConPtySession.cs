@@ -58,6 +58,13 @@ private const int PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
 
     private bool _disposed;
 
+    public bool HasCodexProcess => _processInfo.dwProcessId != 0 &&
+        ProcessTree.HasDescendantNamed(_processInfo.dwProcessId, "codex");
+
+    public string? DetectedAgentCommand => _processInfo.dwProcessId == 0
+        ? null
+        : ProcessTree.FindDescendantNamed(_processInfo.dwProcessId, "codex", "claude");
+
 
 
     public ConPtySession(short columns, short rows)

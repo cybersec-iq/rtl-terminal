@@ -42,6 +42,7 @@ public partial class MainWindow : Window
     private bool _suppressRightMouseUp;
     private Key? _pendingContextMenuKey;
     private (int X, int Y, int Button)? _lastReportedMouseCell;
+    private TerminalPane? _codexVoicePane;
 
     public MainWindow()
     {
@@ -128,16 +129,21 @@ ApplySavedFontSettings();
         _ = CheckForUpdatesOnStartupAsync();
     }
 
-    private void CreateTerminalTab(
+    private TerminalPane CreateTerminalTab(
         TerminalProfile profile,
-        string? requestedStartupDirectory = null)
+        string? requestedStartupDirectory = null,
+        string? customTitle = null,
+        string? startupAgentCommand = null)
     {
         var pane = CreatePane(profile);
         var tab = new TerminalTab(pane);
+        tab.CustomTitle = customTitle;
+        pane.PendingStartupCommand = startupAgentCommand;
         _tabs.Add(tab);
         ShowTab(tab);
         StartPane(pane, requestedStartupDirectory);
         ActiveView.Focus();
+        return pane;
     }
 
     // Prefer side by side; narrow panes split into a top and bottom pair.
@@ -359,6 +365,27 @@ ApplySavedFontSettings();
     private void NewTabButton_Click(object sender, RoutedEventArgs e)
     {
         CreateTerminalTab(_defaultProfile);
+    }
+
+    private void SelectWorkingFolderButton_Click(object sender, RoutedEventArgs e)
+    {
+        var profile = ActivePane?.Profile ?? _defaultProfile;
+        var picker = new OpenFolderDialog
+        {
+            Title = "Select working folder for a new terminal tab",
+            InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            Multiselect = false
+        };
+
+        if (picker.ShowDialog(this) != true) return;
+
+        var directoryName = Path.GetFileName(picker.FolderName.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        if (string.IsNullOrWhiteSpace(directoryName)) directoryName = picker.FolderName;
+        var projectName = PromptForTabName("Name project tab", directoryName);
+        if (projectName is null) return;
+
+        var agentCommand = ActivePane?.Session?.DetectedAgentCommand;
+        CreateTerminalTab(profile, picker.FolderName, projectName, agentCommand);
     }
 
     private void ProfileMenuButton_Click(object sender, RoutedEventArgs e)
@@ -599,9 +626,11 @@ ApplySavedFontSettings();
         copy.Click += (_, _) => CopySelection();
         var paste = new MenuItem { Header = "_Paste", IsEnabled = ActiveSession is not null };
         paste.Click += (_, _) => PasteClipboard();
+        var pasteImage = new MenuItem { Header = "Paste image into AI CLI", InputGestureText = "Ctrl+Alt+V", IsEnabled = ActiveSession is not null };
+        pasteImage.Click += (_, _) => SendNativePasteKey();
         var select = new MenuItem { Header = "Select _all" };
         select.Click += (_, _) => ActiveView.SelectAll();
-        menu.Items.Add(copy); menu.Items.Add(paste); menu.Items.Add(new Separator()); menu.Items.Add(select);
+        menu.Items.Add(copy); menu.Items.Add(paste); menu.Items.Add(pasteImage); menu.Items.Add(new Separator()); menu.Items.Add(select);
         menu.Items.Add(new Separator()); menu.Items.Add(split); menu.Items.Add(movePane); menu.Items.Add(closePane);
         return menu;
     }
@@ -842,6 +871,45 @@ ApplySavedFontSettings();
     {
         var option = ThemeOption.QuickMode(DarkModeButton.IsChecked == true, _lastDarkScheme);
         ApplyColors(option.Theme, option.Scheme);
+    }
+
+    private void VoiceModeButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (_codexVoicePane is { } activeVoicePane)
+        {
+            if (activeVoicePane.Session?.HasCodexProcess == true)
+                activeVoicePane.Session.Write("/voice stop\r");
+            _codexVoicePane = null;
+            VoiceModeLabel.Text = "Voice";
+            VoiceModeButton.ToolTip = "Start Codex voice mode in the active Codex CLI pane";
+            ActiveView.Focus();
+            return;
+        }
+
+        if (ActivePane is not { Session: { HasCodexProcess: true } session } pane)
+        {
+            MessageBox.Show(this, "برای Voice باید نشست فعال داخل Codex CLI باشد.", "حالت گفتار Codex", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        session.Write("/voice\r");
+        _codexVoicePane = pane;
+        VoiceModeLabel.Text = "Stop voice";
+        VoiceModeButton.ToolTip = "Stop Codex voice mode in the pane where it was started";
+        ActiveView.Focus();
+    }
+
+    private void CopyLastResponseButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (ActivePane is not { Session: { HasCodexProcess: true } session })
+        {
+            MessageBox.Show(this, "برای کپی آخرین پاسخ، نشست فعال باید داخل Codex CLI باشد.", "کپی گزارش Codex", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        // Codex CLI's native Ctrl+O action copies its latest completed response as Markdown.
+        session.Write("\x0f");
+        ActiveView.Focus();
     }
 
     private void ApplyColors(AppThemeKind theme, ColorScheme? scheme)
@@ -1556,6 +1624,8 @@ ApplySavedFontSettings();
     private ContextMenu CreateTabContextMenu(TerminalTab tab)
     {
         var menu = new ContextMenu { Style = (Style)FindResource("DarkContextMenuStyle") };
+        var rename = new MenuItem { Header = "Rename tab..." };
+        rename.Click += (_, _) => RenameTab(tab);
         var split = new MenuItem
         {
             Header = "Split tab", Tag = tab,
@@ -1570,10 +1640,72 @@ ApplySavedFontSettings();
         join.Click += (_, _) => JoinTab(tab);
         var close = new MenuItem { Header = "Close tab" };
         close.Click += (_, _) => CloseTab(tab);
+        menu.Items.Add(rename); menu.Items.Add(new Separator());
         menu.Items.Add(split); menu.Items.Add(join);
         menu.Items.Add(new Separator()); menu.Items.Add(CreateTabColorMenu(tab));
         menu.Items.Add(new Separator()); menu.Items.Add(close);
         return menu;
+    }
+
+    private void RenameTab(TerminalTab tab)
+    {
+        if (!_tabs.Contains(tab)) return;
+
+        var title = PromptForTabName("Rename tab", tab.CustomTitle ?? tab.Title);
+        if (title is null || !_tabs.Contains(tab)) return;
+        tab.CustomTitle = title;
+        RebuildTabStrip();
+    }
+
+    private string? PromptForTabName(string windowTitle, string initialName)
+    {
+        var input = new TextBox
+        {
+            Text = initialName,
+            MinWidth = 300,
+            Margin = new Thickness(0, 0, 0, 12),
+            VerticalContentAlignment = VerticalAlignment.Center
+        };
+        var buttons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right
+        };
+        var save = new Button { Content = "OK", IsDefault = true, MinWidth = 84, Margin = new Thickness(0, 0, 8, 0) };
+        var cancel = new Button { Content = "Cancel", IsCancel = true, MinWidth = 84 };
+        buttons.Children.Add(save);
+        buttons.Children.Add(cancel);
+
+        var content = new StackPanel { Margin = new Thickness(16) };
+        content.Children.Add(new TextBlock { Text = "Project / tab name", Margin = new Thickness(0, 0, 0, 6) });
+        content.Children.Add(input);
+        content.Children.Add(buttons);
+
+        var dialog = new Window
+        {
+            Title = windowTitle,
+            Owner = this,
+            Content = content,
+            Width = 380,
+            Height = 160,
+            ResizeMode = ResizeMode.NoResize,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            ShowInTaskbar = false
+        };
+        save.Click += (_, e) =>
+        {
+            e.Handled = true;
+            dialog.DialogResult = true;
+        };
+        dialog.Loaded += (_, _) =>
+        {
+            input.Focus();
+            input.SelectAll();
+        };
+
+        if (dialog.ShowDialog() != true) return null;
+        var title = input.Text.Trim();
+        return title.Length == 0 ? initialName : title;
     }
 
     private void JoinTabMenuItem_SubmenuOpened(object sender, RoutedEventArgs e)
@@ -1743,6 +1875,12 @@ ApplySavedFontSettings();
             e.Handled = true;
             return;
         }
+        if (GetEffectiveKey(e) == Key.Escape && ActiveView.HasSelection)
+        {
+            ActiveView.ClearSelection();
+            e.Handled = true;
+            return;
+        }
         if (ActiveSession is null)
             return;
 
@@ -1759,6 +1897,14 @@ ApplySavedFontSettings();
         if (controlPressed && shiftPressed && e.Key == Key.V)
         {
             PasteClipboard();
+            e.Handled = true;
+            return;
+        }
+
+        if (controlPressed && (Keyboard.Modifiers & ModifierKeys.Alt) != 0 && GetEffectiveKey(e) == Key.V)
+        {
+            // Let image-aware TUIs such as Codex read the OS clipboard themselves.
+            SendNativePasteKey();
             e.Handled = true;
             return;
         }
@@ -1790,7 +1936,8 @@ ApplySavedFontSettings();
 
         if (controlPressed && e.Key == Key.A)
         {
-            ActiveView.SelectAll();
+            if (ActiveView.IsAllSelected) ActiveView.ClearSelection();
+            else ActiveView.SelectAll();
             e.Handled = true;
             return;
         }
@@ -1953,6 +2100,14 @@ ApplySavedFontSettings();
         }
     }
 
+    private void SendNativePasteKeyMenuItem_Click(object sender, RoutedEventArgs e) => SendNativePasteKey();
+
+    private void SendNativePasteKey()
+    {
+        ActiveSession?.Write("\x16");
+        ActiveView.Focus();
+    }
+
     private async void PasteClipboard()
     {
         try { await PasteClipboardCoreAsync(); }
@@ -2098,6 +2253,22 @@ ApplySavedFontSettings();
                 flush: false);
 
             var output = new string(characters, 0, characterCount);
+
+            var startupCommand = Interlocked.Exchange(ref pane.PendingStartupCommand, null);
+            if (!string.IsNullOrWhiteSpace(startupCommand))
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.Delay(1200, cancellationToken).ConfigureAwait(false);
+                        if (!cancellationToken.IsCancellationRequested && ReferenceEquals(pane.Session, session))
+                            session.Write(startupCommand + "\r");
+                    }
+                    catch (OperationCanceledException) { }
+                    catch (ObjectDisposedException) { }
+                });
+            }
 
             var snapshot = buffer.Process(output);
 
@@ -2330,8 +2501,11 @@ ApplySavedFontSettings();
         public List<TerminalPane> Panes { get; } = [pane];
         public TerminalPane ActivePane { get; set; } = pane;
         public Color? BackgroundColor { get; set; }
+        public string? CustomTitle { get; set; }
         public TerminalProfile Profile => ActivePane.Profile;
-        public string Title => Panes.Count > 1 ? $"{ActivePane.Title} (+{Panes.Count - 1})" : ActivePane.Title;
+        public string Title => !string.IsNullOrWhiteSpace(CustomTitle)
+            ? CustomTitle
+            : Panes.Count > 1 ? $"{ActivePane.Title} (+{Panes.Count - 1})" : ActivePane.Title;
     }
 
     private sealed class TerminalPane(
@@ -2357,6 +2531,7 @@ ApplySavedFontSettings();
         public bool FollowOutput { get; set; } = true;
         public (short Columns, short Rows) GridSize { get; set; }
         public double VerticalOffset { get; set; }
+        public string? PendingStartupCommand;
 
         public Task DisposeAsync()
         {
