@@ -86,3 +86,10 @@
 - آزمون‌های Buffer موفق شدند. ساخت RenderTests در مسیر موقت موفق شد، اما اجرای کامل آن در `CheckLivePaneSessions` با `Live pane output timed out` متوقف شد؛ ترمینال‌های در حال استفاده باز نگه داشته شدند.
 - `dotnet build RtlTerminal.sln` به قفل بودن DLL/EXE توسط پنجرهٔ باز `RtlTerminal (20284)` برخورد کرد؛ هیچ پردازشی بسته نشد. اجرای تمیز Windows CI پس از push معیار نهایی این بخش است.
 - Node suite ایزوله: 14/14 PASS؛ `node --check` برای فایل‌های موتور PASS.
+
+### انتشار و نصب محلی 1.1.5
+
+- GitHub `main`: commit `b833df92339560c923eb9677ce3897ceed3dd1a4`؛ Windows CI run `39172449464` با Build، Buffer و Render همگی موفق.
+- Release عمومی: [v1.1.5](https://github.com/cybersec-iq/rtl-terminal/releases/tag/v1.1.5)؛ workflow `39172564552` موفق؛ asset `RtlTerminal-Setup-1.1.5-x64.exe`، SHA-256 `E41387831303F73C9BF0ADCDAF4D85214A8C56875A3E327A45CC73FF0BC639DA`.
+- نصب روی همین دستگاه: Inno Setup exit code 0 و log برابر `Installation process succeeded`; نسخهٔ `C:\Program Files\AryanIQ\Rtl Terminal\RtlTerminal.exe` برابر `1.1.5+b833df92339560c923eb9677ce3897ceed3dd1a4`.
+- میان‌بر دسکتاپ عمومی `C:\Users\Public\Desktop\Rtl Terminal.lnk` به exe نصب‌شده اشاره می‌کند و IconLocation صریحاً روی منبع آیکون همان exe تنظیم شده؛ اجرای برنامه از روی آیکون هنوز توسط کاربر تأیید نشده.
