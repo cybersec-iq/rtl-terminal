@@ -157,9 +157,9 @@ public static class AppSettings
         var previewScheme = Environment.GetEnvironmentVariable("RTLTERMINAL_COLOR_SCHEME");
         if (!string.IsNullOrWhiteSpace(previewScheme)) return previewScheme;
         using var key = Registry.CurrentUser.OpenSubKey(SettingsKey);
-        // A missing value means first launch. An explicitly saved empty value
-        // remains the built-in dark theme selection.
-        return key?.GetValue("ColorScheme") is string saved
+        // Restore the approved dark-blue look if an earlier preview saved an empty scheme.
+        // Preserve explicitly selected named schemes.
+        return key?.GetValue("ColorScheme") is string saved && !string.IsNullOrWhiteSpace(saved)
             ? saved
             : "Windows Terminal";
     }
