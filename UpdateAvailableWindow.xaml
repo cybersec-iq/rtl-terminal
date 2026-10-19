@@ -7,7 +7,25 @@
         Height="255"
         ResizeMode="NoResize"
         WindowStartupLocation="CenterOwner"
-        Background="#f4f5f7">
+        Background="{DynamicResource DialogBackgroundBrush}">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="TerminalScrollBar.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+            <Style TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{DynamicResource DialogForegroundBrush}" />
+            </Style>
+            <Style TargetType="CheckBox">
+                <Setter Property="Foreground" Value="{DynamicResource DialogForegroundBrush}" />
+            </Style>
+            <Style TargetType="Button">
+                <Setter Property="Background" Value="{DynamicResource DialogSurfaceBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource DialogForegroundBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource DialogBorderBrush}" />
+            </Style>
+        </ResourceDictionary>
+    </Window.Resources>
     <Grid Margin="24">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -19,15 +37,15 @@
         <TextBlock Text="A new update is available"
                    FontSize="22"
                    FontWeight="SemiBold"
-                   Foreground="#182033" />
+                   />
 
         <StackPanel Grid.Row="1"
                     Margin="0,16,0,12">
             <TextBlock x:Name="VersionTextBlock"
                        FontSize="14"
-                       Foreground="#30394d" />
+                       />
             <TextBlock Margin="0,8,0,0"
-                       Foreground="#586174"
+                       Foreground="{DynamicResource DialogMutedBrush}"
                        TextWrapping="Wrap"
                        Text="Open the official GitHub release page to download and install the update." />
         </StackPanel>

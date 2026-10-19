@@ -6,7 +6,7 @@ namespace RtlTerminal;
 internal static class AgentEngineDeployment
 {
     private static readonly string[] RuntimeFiles =
-    ["xagent.js", "route-ui.js", "route-hub.js", "generic-broker.js", "registry.json"];
+    ["xagent.js", "codex-account-status.js", "route-ui.js", "route-hub.js", "generic-broker.js", "registry.json"];
 
     public static string EnsureDeployed(string sessionId)
     {

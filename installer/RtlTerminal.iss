@@ -37,6 +37,12 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 [Files]
 Source: "{#PublishDirectory}\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#PublishDirectory}\ConPty\*"; DestDir: "{app}\ConPty"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#PublishDirectory}\AgentEngine\xagent.js"; DestDir: "{app}\AgentEngine"; Flags: ignoreversion
+Source: "{#PublishDirectory}\AgentEngine\codex-account-status.js"; DestDir: "{app}\AgentEngine"; Flags: ignoreversion
+Source: "{#PublishDirectory}\AgentEngine\route-ui.js"; DestDir: "{app}\AgentEngine"; Flags: ignoreversion
+Source: "{#PublishDirectory}\AgentEngine\route-hub.js"; DestDir: "{app}\AgentEngine"; Flags: ignoreversion
+Source: "{#PublishDirectory}\AgentEngine\generic-broker.js"; DestDir: "{app}\AgentEngine"; Flags: ignoreversion
+Source: "{#PublishDirectory}\AgentEngine\registry.json"; DestDir: "{app}\AgentEngine"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Rtl Terminal"; Filename: "{app}\{#AppExeName}"

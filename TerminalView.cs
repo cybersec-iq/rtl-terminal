@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -18,6 +19,9 @@ public sealed class TerminalView : ContentControl
     private bool _rowRtl;
     private double _cellWidth = 8.5, _lineHeight = 18;
     private (int Row, int Offset)? _anchor, _end;
+    private string? _lastSearchText;
+    private int _lastSearchRow;
+    private int _lastSearchOffset;
     private bool _dragging;
     private readonly Dictionary<int, RowLayout> _layouts = [];
     private readonly Dictionary<TerminalColor, Brush> _brushes = [];
@@ -63,6 +67,7 @@ public sealed class TerminalView : ContentControl
             HorizontalContentAlignment = HorizontalAlignment.Stretch,
             Focusable = false
         };
+        AutomationProperties.SetName(_scroll, "Terminal scrollback");
         Content = _scroll;
         _scroll.SetBinding(MarginProperty, new System.Windows.Data.Binding(nameof(Padding)) { Source = this });
         _scroll.ScrollChanged += (_, e) =>
@@ -117,8 +122,7 @@ public sealed class TerminalView : ContentControl
             _lineHeight == lineHeight && _fontKey == fontKey && previous.Modes == snapshot.Modes &&
             previous.CursorVisible == snapshot.CursorVisible && previous.CursorRow == snapshot.CursorRow &&
             previous.CursorColumn == snapshot.CursorColumn && previous.Lines.Count == snapshot.Lines.Count &&
-            previous.Lines.Zip(snapshot.Lines).All(pair => ReferenceEquals(pair.First, pair.Second) ||
-                pair.First.CellLength == pair.Second.CellLength && pair.First.WrappedFromPrevious == pair.Second.WrappedFromPrevious && pair.First.Runs.SequenceEqual(pair.Second.Runs));
+            SameVisibleLines(previous, snapshot);
         if (trimmed != 0 || _smartRtl != smartRtl || _rowRtl != rowRtl || _cellWidth != cellWidth ||
             _lineHeight != lineHeight || _fontKey != fontKey ||
             _snapshot?.Modes.AlternateScreen != snapshot.Modes.AlternateScreen)
@@ -134,6 +138,27 @@ public sealed class TerminalView : ContentControl
         if (!sameFrame) _surface.InvalidateVisual();
         if (followOutput) _scroll.ScrollToEnd();
         else if (trimmed > 0) _scroll.ScrollToVerticalOffset(Math.Max(0, VerticalOffset - trimmed * lineHeight));
+    }
+
+    private bool SameVisibleLines(TerminalSnapshot previous, TerminalSnapshot current)
+    {
+        // A terminal snapshot includes the full scrollback. Comparing every row
+        // here for each keystroke makes input latency grow with history size.
+        // Only rows that can currently be painted need a content comparison.
+        var first = Math.Max(0, (int)(VerticalOffset / _lineHeight));
+        var last = Math.Min(current.Lines.Count,
+            (int)Math.Ceiling((VerticalOffset + _scroll.ViewportHeight) / _lineHeight) + 1);
+        for (var row = first; row < last; row++)
+        {
+            var oldLine = previous.Lines[row];
+            var newLine = current.Lines[row];
+            if (!ReferenceEquals(oldLine, newLine) &&
+                (oldLine.CellLength != newLine.CellLength ||
+                 oldLine.WrappedFromPrevious != newLine.WrappedFromPrevious ||
+                 !oldLine.Runs.SequenceEqual(newLine.Runs)))
+                return false;
+        }
+        return true;
     }
 
     public string CreateHtmlPreview(HtmlPreviewScope scope = HtmlPreviewScope.CurrentPage)
@@ -244,6 +269,42 @@ public sealed class TerminalView : ContentControl
             result.Append(text[from..Math.Max(from, to)]);
         }
         return result.ToString();
+    }
+
+    public bool FindNext(string query)
+    {
+        if (_snapshot is not { Lines.Count: > 0 } snapshot || string.IsNullOrWhiteSpace(query))
+            return false;
+
+        var sameQuery = string.Equals(query, _lastSearchText, StringComparison.OrdinalIgnoreCase);
+        var startRow = sameQuery
+            ? Math.Clamp(_lastSearchRow, 0, snapshot.Lines.Count - 1)
+            : Math.Clamp((int)(VerticalOffset / _lineHeight), 0, snapshot.Lines.Count - 1);
+        var startOffset = sameQuery ? Math.Max(0, _lastSearchOffset) : 0;
+        for (var step = 0; step < snapshot.Lines.Count; step++)
+        {
+            var row = (startRow + step) % snapshot.Lines.Count;
+            var lineText = Text(snapshot.Lines[row]);
+            var offset = step == 0 ? Math.Min(startOffset, lineText.Length) : 0;
+            var found = lineText.IndexOf(query, offset, StringComparison.CurrentCultureIgnoreCase);
+            if (found < 0 && step == 0 && sameQuery)
+                found = lineText.IndexOf(query, StringComparison.CurrentCultureIgnoreCase);
+            if (found < 0) continue;
+
+            _anchor = (row, found);
+            _end = (row, found + query.Length);
+            _lastSearchText = query;
+            _lastSearchRow = row;
+            _lastSearchOffset = found + query.Length;
+            _scroll.ScrollToVerticalOffset(row * _lineHeight);
+            _surface.InvalidateVisual();
+            return true;
+        }
+
+        _lastSearchText = query;
+        _lastSearchRow = startRow;
+        _lastSearchOffset = 0;
+        return false;
     }
 
     private ((int Row, int Offset) Start, (int Row, int Offset) End) SelectionRange()

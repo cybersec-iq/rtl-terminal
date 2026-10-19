@@ -39,6 +39,31 @@ test("X Agents host plan validates and passes authorized project roots to Codex"
   }
 });
 
+test("running X Agent manager reads atomically saved project roots for its next launch", () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "rtl-xagent-live-roots-"));
+  const previousFile = process.env.XAGENT_PROJECT_PATHS_FILE;
+  try {
+    const original = path.join(temp, "original");
+    const added = path.join(temp, "added");
+    for (const dir of [original, added]) fs.mkdirSync(dir, { recursive: true });
+    const manifestFile = path.join(temp, "run", "project-paths.json");
+    fs.mkdirSync(path.dirname(manifestFile), { recursive: true });
+    process.env.XAGENT_PROJECT_PATHS_FILE = manifestFile;
+    fs.writeFileSync(manifestFile, JSON.stringify({ schemaVersion: 1, paths: [original] }));
+    const engine = require("../../AgentEngine/xagent.js");
+    assert.deepEqual(engine.currentProjectPaths(), [original]);
+    const replacement = manifestFile + ".tmp";
+    fs.writeFileSync(replacement, JSON.stringify({ schemaVersion: 1, paths: [original, added] }));
+    fs.renameSync(replacement, manifestFile);
+    assert.deepEqual(engine.currentProjectPaths(), [original, added]);
+    assert.equal(engine.agentWorkingDirectory(), original);
+  } finally {
+    if (previousFile === undefined) delete process.env.XAGENT_PROJECT_PATHS_FILE;
+    else process.env.XAGENT_PROJECT_PATHS_FILE = previousFile;
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 test("X Agents host catalog includes the fifth existing Codex profile without opening credentials", () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "rtl-xagent-codex-profiles-"));
   try {
@@ -61,6 +86,14 @@ test("Coding Agents menu orders Codex, Claude Code, and Antigravity before other
   const engine = require("../../AgentEngine/xagent.js");
   const ordered = engine.orderCodingAgents([{ id: "agy" }, { id: "opencode" }, { id: "claude" }, { id: "codex" }]);
   assert.deepEqual(ordered.map(x => x.id), ["codex", "claude", "agy", "opencode"]);
+});
+
+test("embedded Rtl Terminal launches Coding Agents in the same terminal, never a Windows Terminal tab", () => {
+  const engine = require("../../AgentEngine/xagent.js");
+  assert.equal(engine.resolveLaunchMode("auto", { inRtlTerminal: true }), "same");
+  assert.equal(engine.resolveLaunchMode("tab", { inRtlTerminal: true, inWindowsTerminal: true }), "same");
+  assert.equal(engine.resolveLaunchMode("tab", { inWindowsTerminal: true }), "tab");
+  assert.equal(engine.resolveLaunchMode("auto", {}), "same");
 });
 
 test("named CLI profiles clear inherited credential variables instead of passing the string null", () => {

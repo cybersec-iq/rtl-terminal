@@ -10,7 +10,7 @@ internal static class TerminalWordWrap
     public static TerminalSnapshot Reflow(TerminalSnapshot source)
     {
         if (source.Modes.AlternateScreen || source.Modes.MouseTrackingMode != 0 ||
-            !source.Lines.Any(line => line.WrappedFromPrevious)) return source;
+            !source.HasWrappedLines) return source;
         var lines = new List<TerminalLine>();
         var cursorRow = source.CursorRow;
         var cursorColumn = source.CursorColumn;

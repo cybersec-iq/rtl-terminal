@@ -33,12 +33,37 @@ internal static partial class Program
             root.Measure(new Size(980,620)); root.Arrange(new Rect(0,0,980,620)); root.UpdateLayout();
             root.Dispatcher.Invoke(()=>{},DispatcherPriority.ContextIdle);
         }
-        MenuItem Item(ContextMenu menu,string header) => menu.Items.OfType<MenuItem>().Single(m=>Equals(m.Header,header));
+        MenuItem Item(ItemsControl menu,string header) => menu.Items.OfType<MenuItem>().Single(m=>Equals(m.Header,header));
         ContextMenu Menu(object tab)=>(ContextMenu)Call("CreateTabContextMenu",tab)!;
         Color? ColorOf(object tab)=>(Color?)tabType.GetProperty("BackgroundColor")!.GetValue(tab);
         var menu=Menu(first);
         if(window.FindName("SplitPaneButton") is not null || !ReferenceEquals(Item(menu,"Split tab").Tag,first))
             throw new Exception("Split was not moved to the target tab context menu");
+        foreach (var command in new[] { "Duplicate tab", "Move tab", "Find", "Export text...", "Close" })
+            if (!menu.Items.OfType<MenuItem>().Any(item => Equals(item.Header, command)))
+                throw new Exception($"Windows Terminal tab command '{command}' is missing");
+        var profileMenu=(ContextMenu)Call("CreateProfileMenu")!;
+        foreach(var profileName in new[]{"Command Prompt","Windows PowerShell"})
+        {
+            var profileItem=profileMenu.Items.OfType<MenuItem>().Single(item=>Equals(item.Header,profileName));
+            if(!profileItem.Items.OfType<MenuItem>().Any(item=>Equals(item.Header,"New tab")) ||
+               !profileItem.Items.OfType<MenuItem>().Any(item=>Equals(item.Header,"X Agents CLI")))
+                throw new Exception($"Profile '{profileName}' is missing a direct new tab or X Agents entry");
+        }
+        foreach(var command in new[]{"Settings","Command palette","About Rtl Terminal"})
+            if(!profileMenu.Items.OfType<MenuItem>().Any(item=>Equals(item.Header,command)))
+                throw new Exception($"Windows Terminal profile menu option '{command}' is missing");
+        var closeMenu=Item(menu,"Close");
+        foreach(var command in new[]{"Close tab","Close other tabs","Close tabs to the right"})
+            if(!closeMenu.Items.OfType<MenuItem>().Any(item=>Equals(item.Header,command)))
+                throw new Exception($"Close submenu command '{command}' is missing");
+        var moveMenu=Item(menu,"Move tab");
+        Item(moveMenu,"Move tab right").RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        if(!ReferenceEquals(tabs[1],first))throw new Exception("Move tab right did not reorder the target tab");
+        Item(Menu(first),"Move tab").Items.OfType<MenuItem>().Single(item=>Equals(item.Header,"Move tab left"))
+            .RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        if(!ReferenceEquals(tabs[0],first))throw new Exception("Move tab left did not restore the target tab order");
+        Call("SelectTab",second); Layout();
         var colors=Item(menu,"Color...");
         var swatches=(UniformGrid)((MenuItem)colors.Items[0]).Header;
         var yellow=swatches.Children.OfType<Button>().Single(b=>Equals(b.ToolTip,"Yellow"));
@@ -75,6 +100,6 @@ internal static partial class Program
         typeof(MainWindow).GetField("_paneShortcuts",flags)!.SetValue(window,new PaneShortcutSettings(Split:false));
         if(Item(Menu(second),"Split tab").InputGestureText!="")throw new Exception("Disabled shortcut still advertised in tab menu");
         window.Close();
-        Console.WriteLine("PASS tab context split targeting, independent colors, readable labels, theme/selection retention and color reset");
+        Console.WriteLine("PASS tab context command parity, move ordering, split targeting, independent colors, readable labels, theme/selection retention and color reset");
     }
 }

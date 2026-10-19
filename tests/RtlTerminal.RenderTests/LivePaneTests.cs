@@ -76,6 +76,7 @@ internal static partial class Program
             sessions[0].Write("\r");WaitFor(()=>Text(panes[0]).Contains("clipboard-"));
             var images=(List<string>)typeof(MainWindow).GetField("_temporaryClipboardFiles",flags)!.GetValue(window)!;
             if(images.Count!=1 || !File.Exists(images[0]))throw new Exception("Dropped image was not saved as a temporary PNG");
+            CheckUnexpectedShellEnd(Call, tabs, tabType, profileType, Set, Get, Pump, Text);
             Console.WriteLine("PASS two live shells, target-pane text/file/image drops, literal paths and temporary image creation");
         }
         finally
@@ -86,5 +87,43 @@ internal static partial class Program
             window.Close();
             Task.WaitAll(readers.ToArray(),TimeSpan.FromSeconds(10));
         }
+    }
+
+    private static void CheckUnexpectedShellEnd(Func<string, object?[], object?> call, IList tabs,
+        Type tabType, Type profileType, Action<object, string, object?> set, Func<object, string, object?> get,
+        Action pump, Func<object, string> text)
+    {
+        var pane = call("CreatePane", [Enum.ToObject(profileType, 0)])!;
+        var tab = Activator.CreateInstance(tabType, pane)!;
+        tabs.Add(tab);
+        call("ShowTab", [tab]);
+        pump();
+        set(pane, "Buffer", new TerminalBuffer(80, 20));
+        set(pane, "CancellationTokenSource", new CancellationTokenSource());
+        var eof = new FakeTransport(false);
+        set(pane, "Session", eof);
+        call("ReadOutputLoop", [pane]);
+        if (!text(pane).Contains("[Shell exited", StringComparison.Ordinal))
+            throw new Exception("Unexpected shell EOF was not shown in the terminal");
+
+        set(pane, "Buffer", new TerminalBuffer(80, 20));
+        set(pane, "CancellationTokenSource", new CancellationTokenSource());
+        var failed = new FakeTransport(true);
+        set(pane, "Session", failed);
+        call("ReadOutputLoop", [pane]);
+        if (!text(pane).Contains("[Terminal output error:", StringComparison.Ordinal))
+            throw new Exception("Terminal read failure was not shown in the terminal");
+        set(pane, "Session", null);
+        eof.Dispose(); failed.Dispose();
+        Console.WriteLine("PASS unexpected shell exit and output errors are visible in the terminal");
+    }
+
+    private sealed class FakeTransport(bool fail) : ITerminalTransport
+    {
+        public bool HasCodexProcess => false;
+        public int Read(byte[] buffer) => fail ? throw new IOException("probe failure") : 0;
+        public void Write(string text) { }
+        public void Resize(short columns, short rows) { }
+        public void Dispose() { }
     }
 }

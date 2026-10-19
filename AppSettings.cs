@@ -137,6 +137,8 @@ public static class AppSettings
 
     public static AppThemeKind LoadTheme()
     {
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RTLTERMINAL_COLOR_SCHEME")))
+            return AppThemeKind.Dark;
         using var key = Registry.CurrentUser.OpenSubKey(SettingsKey);
         return Enum.TryParse(key?.GetValue("Theme") as string, out AppThemeKind theme)
             ? theme
@@ -145,22 +147,26 @@ public static class AppSettings
 
     public static void SaveTheme(AppThemeKind theme)
     {
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RTLTERMINAL_COLOR_SCHEME"))) return;
         using var key = Registry.CurrentUser.CreateSubKey(SettingsKey);
         key.SetValue("Theme", theme.ToString(), RegistryValueKind.String);
     }
 
     public static string? LoadColorScheme()
     {
+        var previewScheme = Environment.GetEnvironmentVariable("RTLTERMINAL_COLOR_SCHEME");
+        if (!string.IsNullOrWhiteSpace(previewScheme)) return previewScheme;
         using var key = Registry.CurrentUser.OpenSubKey(SettingsKey);
         // A missing value means first launch. An explicitly saved empty value
         // remains the built-in dark theme selection.
         return key?.GetValue("ColorScheme") is string saved
             ? saved
-            : "AryanIQ Phosphor";
+            : "Windows Terminal";
     }
 
     public static void SaveColorScheme(string? name)
     {
+        if (!string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RTLTERMINAL_COLOR_SCHEME"))) return;
         using var key = Registry.CurrentUser.CreateSubKey(SettingsKey);
         key.SetValue("ColorScheme", name ?? "", RegistryValueKind.String);
     }

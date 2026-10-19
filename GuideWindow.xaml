@@ -8,22 +8,26 @@
         MinWidth="560"
         MinHeight="480"
         WindowStartupLocation="CenterOwner"
-        Background="#10151f">
+        Background="{DynamicResource DialogBackgroundBrush}">
     <Window.Resources>
-        <Style x:Key="GuideCardStyle" TargetType="Border">
-            <Setter Property="Background" Value="#172234" />
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="TerminalScrollBar.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+            <Style x:Key="GuideCardStyle" TargetType="Border">
+            <Setter Property="Background" Value="{DynamicResource DialogSurfaceBrush}" />
             <Setter Property="CornerRadius" Value="10" />
             <Setter Property="Padding" Value="18" />
             <Setter Property="Margin" Value="0,0,0,14" />
         </Style>
         <Style x:Key="GuideTitleStyle" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#56b4ff" />
+            <Setter Property="Foreground" Value="{DynamicResource DialogAccentBrush}" />
             <Setter Property="FontSize" Value="17" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Margin" Value="0,0,0,9" />
         </Style>
         <Style x:Key="GuideTextStyle" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#e4eaf4" />
+            <Setter Property="Foreground" Value="{DynamicResource DialogForegroundBrush}" />
             <Setter Property="FontSize" Value="14" />
             <Setter Property="LineHeight" Value="25" />
             <Setter Property="TextWrapping" Value="Wrap" />
@@ -31,17 +35,18 @@
         <Style x:Key="GuideNoteStyle"
                TargetType="TextBlock"
                BasedOn="{StaticResource GuideTextStyle}">
-            <Setter Property="Foreground" Value="#ffcf70" />
+            <Setter Property="Foreground" Value="{DynamicResource DialogAccentBrush}" />
         </Style>
         <Style x:Key="LanguageButtonStyle" TargetType="Button">
-            <Setter Property="Foreground" Value="#e4eaf4" />
-            <Setter Property="Background" Value="#263650" />
-            <Setter Property="BorderBrush" Value="#3c526f" />
+            <Setter Property="Foreground" Value="{DynamicResource DialogForegroundBrush}" />
+            <Setter Property="Background" Value="{DynamicResource DialogSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource DialogBorderBrush}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="Padding" Value="15,7" />
             <Setter Property="Margin" Value="4,0" />
             <Setter Property="Cursor" Value="Hand" />
-        </Style>
+            </Style>
+        </ResourceDictionary>
     </Window.Resources>
 
     <Grid x:Name="ContentRoot" FlowDirection="RightToLeft">
@@ -50,7 +55,7 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <Border Background="#172234" Padding="24,18">
+        <Border Background="{DynamicResource DialogSurfaceBrush}" Padding="24,18">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
@@ -58,12 +63,12 @@
                 </Grid.RowDefinitions>
                 <StackPanel>
                     <TextBlock x:Name="GuideHeading"
-                               Foreground="White"
+                               Foreground="{DynamicResource DialogForegroundBrush}"
                                FontSize="25"
                                FontWeight="SemiBold" />
                     <TextBlock x:Name="GuideSubtitle"
                                Margin="0,7,0,0"
-                               Foreground="#aebbd0"
+                               Foreground="{DynamicResource DialogMutedBrush}"
                                FontSize="14" />
                 </StackPanel>
                 <StackPanel Grid.Row="1"

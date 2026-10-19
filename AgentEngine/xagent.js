@@ -63,6 +63,23 @@ try {
   const paths = encoded ? JSON.parse(Buffer.from(encoded, "base64").toString("utf8")) : [];
   if (Array.isArray(paths)) PROJECT_PATHS = [...new Set(paths.filter(p => typeof p === "string" && path.isAbsolute(p) && fs.existsSync(p) && fs.statSync(p).isDirectory()))].slice(0, 32);
 } catch { PROJECT_PATHS = []; }
+function currentProjectPaths() {
+  const file = process.env.XAGENT_PROJECT_PATHS_FILE;
+  if (file && path.isAbsolute(file)) {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (manifest && manifest.schemaVersion === 1 && Array.isArray(manifest.paths)) {
+        PROJECT_PATHS = [...new Set(manifest.paths.filter(p => typeof p === "string" && path.isAbsolute(p) &&
+          fs.existsSync(p) && fs.statSync(p).isDirectory()).map(p => path.resolve(p)))].slice(0, 32);
+      }
+    } catch (error) {
+      // Keep the last valid roots if a replace is in progress or the manifest is unreadable.
+      if (error.code !== "ENOENT" && !(error instanceof SyntaxError))
+        console.error("X Agent: updated project folders could not be read; keeping the last valid folders.");
+    }
+  }
+  return PROJECT_PATHS;
+}
 const PROJECT_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/.test(process.env.XAGENT_PROJECT_SESSION_ID || "")
   ? process.env.XAGENT_PROJECT_SESSION_ID : null;
 const DEFAULT_HANDOFF_FILE = PROJECT_SESSION_ID ? path.join(ROOT, "handoff", PROJECT_SESSION_ID + ".md") : null;
@@ -70,11 +87,11 @@ const PROJECT_HANDOFF_FILE = (() => {
   const candidate = process.env.XAGENT_TRANSCRIPT_HANDOFF_FILE || DEFAULT_HANDOFF_FILE;
   return typeof candidate === "string" && path.isAbsolute(candidate) && !/[\0\r\n]/.test(candidate) ? candidate : null;
 })();
-function agentWorkingDirectory() { return PROJECT_PATHS[0] || SETTINGS.agentCwd || process.cwd(); }
+function agentWorkingDirectory() { return currentProjectPaths()[0] || SETTINGS.agentCwd || process.cwd(); }
 function projectRootArgs(agent) {
   const flag = agent && agent.host && agent.host.addDirFlag;
   const cwd = path.resolve(agentWorkingDirectory());
-  const extra = PROJECT_PATHS.map(p => path.resolve(p)).filter(p => p.toLowerCase() !== cwd.toLowerCase());
+  const extra = currentProjectPaths().map(p => path.resolve(p)).filter(p => p.toLowerCase() !== cwd.toLowerCase());
   if (extra.length && !flag) flash(`${agent.name}: this CLI has no verified multi-folder flag; only its working folder is selected.`);
   return flag ? extra.flatMap(p => [flag, p]) : [];
 }
@@ -324,15 +341,12 @@ function ensureKnownPaths() {
     path.join(L, "Programs", "Open Interpreter", "bin"), path.join(L, "Programs", "PowerShell", "7"),
     path.join(L, "Microsoft", "WinGet", "Links"), path.join(HOME, "scoop", "shims"),
   ];
-  let userPath = "";
-  try {
-    const r = cp.spawnSync("reg", ["query", "HKCU\\Environment", "/v", "Path"], { encoding: "utf8", windowsHide: true, timeout: 4000 });
-    const m = /REG_(?:EXPAND_)?SZ\s+(.+)/.exec(r.stdout || "");
-    if (m) userPath = m[1].trim().replace(/%([^%]+)%/g, (x, k) => process.env[k] || x);
-  } catch {}
+  return addPathsToCurrentPath(cand);
+}
+function addPathsToCurrentPath(paths) {
   const have = new Set((process.env.PATH || process.env.Path || "").split(path.delimiter).map((x) => x.replace(/[\\/]+$/, "").toLowerCase()));
   const added = [];
-  for (const d of [...cand, ...userPath.split(path.delimiter)]) {
+  for (const d of paths) {
     const k = d.replace(/[\\/]+$/, "").toLowerCase();
     if (!k || have.has(k) || !fileExists(d)) continue;
     have.add(k); added.push(d);
@@ -341,6 +355,18 @@ function ensureKnownPaths() {
   return added;
 }
 const PATH_ADDED = HOST_MODE ? [] : ensureKnownPaths();
+let REGISTERED_PATH_HYDRATION;
+function ensureRegisteredUserPath() {
+  if (HOST_MODE) return Promise.resolve();
+  if (REGISTERED_PATH_HYDRATION) return REGISTERED_PATH_HYDRATION;
+  REGISTERED_PATH_HYDRATION = run('reg query "HKCU\\Environment" /v "Path"', 2000).then((r) => {
+    const m = /REG_(?:EXPAND_)?SZ\s+(.+)/.exec(r.out || "");
+    if (!m) return;
+    const userPath = m[1].trim().replace(/%([^%]+)%/g, (x, k) => process.env[k] || x);
+    addPathsToCurrentPath(userPath.split(path.delimiter));
+  }).catch(() => {});
+  return REGISTERED_PATH_HYDRATION;
+}
 
 // agent cache (fast parallel where.exe probe). Value = resolved command name or null.
 let AGENT_STATUS = null; let AGENT_STATUS_AT = 0; let AGENT_INFLIGHT = null; let AGENT_PATHS = {};
@@ -349,6 +375,7 @@ async function agentStatus(force) {
   if (!force && AGENT_STATUS && now - AGENT_STATUS_AT < 30000) return AGENT_STATUS;
   if (!force && AGENT_INFLIGHT) return AGENT_INFLIGHT;
   AGENT_INFLIGHT = (async () => {
+    await ensureRegisteredUserPath();
     const entries = await Promise.all(REG.agents.map(async (a) => {
       const m = await whereCmd(a.cmd);
       const hit = a.cmd.find((c) => m[c]) || null;
@@ -544,12 +571,22 @@ function convExists(id) { return !!id && fileExists(path.join(PATHS.agyConversat
 // X Agent stays open in its own tab: Park = switch tabs, Resume = switch back
 // (or, when the agent has exited, relaunch the session's own conversation).
 const IN_WT = !!process.env.WT_SESSION;
+const IN_RTL_TERMINAL = process.env.XAGENT_RTLTERMINAL === "1";
 const WT_WINDOW = process.env.XAGENT_WT_WINDOW || "0";
+function resolveLaunchMode(configuredMode, context = {}) {
+  // An embedded X Agent must launch into its owning RTL PTY. Opening wt.exe
+  // here steals focus into a separate Windows Terminal window and breaks the
+  // in-app Coding Agent flow. Standalone sessions can still use tab mode.
+  if (context.inRtlTerminal) return "same";
+  if (configuredMode === "same") return "same";
+  if (configuredMode === "tab") return "tab";
+  return context.inWindowsTerminal ? "tab" : "same";
+}
 function launchMode() {
-  const m = SETTINGS.launchMode || "auto";
-  if (m === "same") return "same";
-  if (m === "tab") return "tab";
-  return IN_WT ? "tab" : "same";
+  return resolveLaunchMode(SETTINGS.launchMode || "auto", {
+    inWindowsTerminal: IN_WT,
+    inRtlTerminal: IN_RTL_TERMINAL,
+  });
 }
 function pidAlive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; } }
 function lockFile(key) { return path.join(PATHS.runDir, key.replace(/[^A-Za-z0-9_.-]/g, "_") + ".json"); }
@@ -620,15 +657,38 @@ function launch(cmdArgs, env, cwd) {
     // single string + shell avoids Node's args-with-shell deprecation and .cmd quoting issues
     const q = (a) => /[\s"&|<>^]/.test(a) ? '"' + a.replace(/"/g, '""') + '"' : a;
     const cmdStr = cmdArgs.map((a, i) => (i === 0 ? a : q(a))).join(" ");
-    const done = (code) => { CHILD_RUNNING = false; LAST_EXIT = code; resolve(code); };
-    CHILD_RUNNING = true;
     let p;
+    const done = (code) => {
+      CHILD_RUNNING = false;
+      clearActiveChildMarker(p && p.pid);
+      LAST_EXIT = code;
+      resolve(code);
+    };
+    CHILD_RUNNING = true;
     try { if (cwd) fs.mkdirSync(cwd, { recursive: true }); } catch {}
-    try { p = cp.spawn(cmdStr, { shell: true, stdio: "inherit", env: env2, cwd: cwd || process.cwd() }); }
+    try {
+      p = cp.spawn(cmdStr, { shell: true, stdio: "inherit", env: env2, cwd: cwd || process.cwd() });
+      if (p.pid) writeActiveChildMarker(p.pid);
+    }
     catch (e) { console.error(C.red + "launch failed: " + e.message + C.rs); done(1); return; }
     p.on("error", (e) => { console.error(C.red + "launch failed: " + e.message + C.rs); done(1); });
     p.on("close", (code) => done(code == null ? 0 : code));
   });
+}
+
+const ACTIVE_CHILD_MARKER = path.join(PATHS.runDir, "xagent.child-active.json");
+function writeActiveChildMarker(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return;
+  try {
+    fs.mkdirSync(PATHS.runDir, { recursive: true });
+    writeJson(ACTIVE_CHILD_MARKER, { pid, startedAt: new Date().toISOString() });
+  } catch {}
+}
+function clearActiveChildMarker(pid) {
+  try {
+    const marker = readJson(ACTIVE_CHILD_MARKER, null);
+    if (marker && (!pid || marker.pid === pid)) fs.unlinkSync(ACTIVE_CHILD_MARKER);
+  } catch {}
 }
 
 /** Open spec in a new Windows Terminal tab; resolves true when the tab's wrapper reports alive. */
@@ -672,7 +732,7 @@ async function startAgent(spec) {
   if (launchMode() === "tab") {
     const r = await openTab(spec);
     if (r.ok && r.exited != null) flash(`"${spec.title}" ran in a new tab and exited immediately (code ${r.exited})${r.exited ? " — see that tab for the error" : ""}`);
-    else if (r.ok) flash(`Started "${spec.title}" in a new tab · X Agent stays here · Ctrl+Tab switches`);
+    else if (r.ok) flash(`Started "${spec.title}" in a new tab · X Agent stays here · ${IN_RTL_TERMINAL ? "Ctrl+Alt+Shift+X returns to Rtl Terminal" : "Ctrl+Tab switches"}`);
     if (r.ok) refreshStatus(true).then(() => draw()).catch(() => {});   // Tabs counter updates now, not after the cache expires
     else await ask(C.red + "tab launch failed: " + r.error + C.rs + " — try Settings › Launch mode = same terminal. [Enter]");
     return;
@@ -945,10 +1005,15 @@ let LOADING = "";       // shown in footer while an action is working
 let ACTING = false;     // re-entrancy guard for Enter
 let PROMPT = null;
 let DRAW_PENDING = false; let DRAW_FULL = false;
-let STATUS_BAR = ""; let STATUS_SHORT = "";
+let STATUS_BAR = "Ready · press r to refresh status"; let STATUS_SHORT = "Ready · r status";
 let STATUS_AT = 0;
-let INPUT_ON = false; let KP_READY = false;
+let INPUT_ON = false; let MOUSE_INPUT_ON = false; let KP_READY = false;
+let MOUSE_REPORTING = false; let MOUSE_INPUT_BUFFER = "";
 let FLASH = null;       // short confirmation shown in the footer (e.g. "started in new tab")
+
+const mouseTrackingSequence = (enabled) => enabled
+  ? "\x1b[?1000h\x1b[?1006h"
+  : "\x1b[?1006l\x1b[?1000l";
 
 function flash(text) {
   FLASH = { text, until: Date.now() + 7000 };
@@ -987,13 +1052,80 @@ function screen() { return SCREENS[SCREENS.length - 1]; }
 
 function enterAlt() {
   if (ALT || !TTY) return;
-  process.stdout.write("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[0m" + BG + "\x1b[2J\x1b[H");
+  process.stdout.write("\x1b[?1049h\x1b[?25l\x1b[?7l" + mouseTrackingSequence(true) + "\x1b[0m" + BG + "\x1b[2J\x1b[H");
   ALT = true;
+  MOUSE_REPORTING = true;
 }
 function leaveAlt() {
   if (!ALT) return;
-  process.stdout.write("\x1b[0m\x1b[?7h\x1b[?25h\x1b[?1049l");
+  process.stdout.write("\x1b[0m" + mouseTrackingSequence(false) + "\x1b[?7h\x1b[?25h\x1b[?1049l");
   ALT = false;
+  MOUSE_REPORTING = false;
+}
+
+function parseSgrMouseData(buffer, chunk) {
+  const input = buffer + String(chunk);
+  const reports = [];
+  const pattern = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
+  let match, consumed = 0;
+  while ((match = pattern.exec(input))) {
+    reports.push({ button: Number(match[1]), x: Number(match[2]), y: Number(match[3]), released: match[4] === "m" });
+    consumed = pattern.lastIndex;
+  }
+  const tail = input.slice(consumed);
+  const escapeAt = tail.lastIndexOf("\x1b");
+  const candidate = escapeAt >= 0 ? tail.slice(escapeAt) : "";
+  const pending = candidate.length <= 32 && /^\x1b(?:\[(?:<\d*(?:;\d*){0,2})?)?$/.test(candidate)
+    ? candidate
+    : "";
+  return { reports, pending };
+}
+
+function menuViewport(itemCount, selectedIndex, height, headerRows, footerRows) {
+  const bodyRows = Math.max(1, height - headerRows - footerRows);
+  const startIndex = itemCount > bodyRows
+    ? Math.max(0, Math.min(itemCount - bodyRows, selectedIndex - Math.floor(bodyRows / 2)))
+    : 0;
+  return {
+    startIndex,
+    bodyRows,
+    visibleCount: Math.min(bodyRows, Math.max(0, itemCount - startIndex)),
+    firstItemRow: headerRows + 1,
+  };
+}
+
+function menuItemAtRow(row, viewport, itemCount) {
+  const offset = row - viewport.firstItemRow;
+  if (!Number.isInteger(row) || offset < 0 || offset >= viewport.visibleCount) return null;
+  const index = viewport.startIndex + offset;
+  return index >= 0 && index < itemCount ? index : null;
+}
+
+function buildMenuHeader(s, height, root) {
+  const head = [];
+  if (root) {
+    head.push(binaryStrip());
+    head.push(...renderBanner(Math.max(0, height - s.items.length - 8)));
+    head.push(C.green + "  ▌" + C.neon + "X AGENT CLI" + C.rs + C.grey + " · matrix control center · " + (launchMode() === "tab" ? "tab mode" : "same-terminal mode") + C.rs);
+    head.push(binaryStrip());
+  } else {
+    head.push(C.neon + " ▸ " + s.title + C.rs + C.grey + "  [Esc = back]");
+    head.push(C.green + line("─"));
+  }
+  return head;
+}
+
+function classifySgrMouseReport(report) {
+  if (!report || report.released) return null;
+  if ((report.button & 64) !== 0) return { type: "wheel", direction: (report.button & 1) === 0 ? -1 : 1 };
+  if ((report.button & 32) !== 0 || (report.button & 3) !== 0) return null;
+  return { type: "click" };
+}
+
+function nextMouseSelection(items, selectedIndex, direction) {
+  for (let index = selectedIndex + Math.sign(direction); index >= 0 && index < items.length; index += Math.sign(direction))
+    if (!items[index].disabled) return index;
+  return selectedIndex;
 }
 
 /** Build the screen as an array of already-clipped lines (<= terminal height). */
@@ -1001,29 +1133,18 @@ function layout() {
   const s = screen(); if (!s) return [];
   const w = termWidth() - 1, h = termHeight();
   const root = SCREENS.length === 1;
-  const head = [];
-  if (root) {
-    head.push(binaryStrip());
-    head.push(...renderBanner(Math.max(0, h - s.items.length - 8)));
-    head.push(C.green + "  ▌" + C.neon + "X AGENT CLI" + C.rs + C.grey + " · matrix control center · " + (launchMode() === "tab" ? "tab mode" : "same-terminal mode") + C.rs);
-    head.push(binaryStrip());
-  } else {
-    head.push(C.neon + " ▸ " + s.title + C.rs + C.grey + "  [Esc = back]");
-    head.push(C.green + line("─"));
-  }
+  const head = buildMenuHeader(s, h, root);
   const foot = [C.green + line("─")];
   if (LOADING) foot.push(C.yellow + " ⟳ " + LOADING + " ...");
   else if (FLASH && Date.now() < FLASH.until) foot.push(C.neon + " ✔ " + FLASH.text);
   else if (s.footer) foot.push(C.grey + " " + s.footer);
   foot.push(C.grey + " ↑↓ move · Enter select · Esc back · q quit · r refresh");
   foot.push(C.green + " " + (STATUS_BAR.length + 2 <= w ? STATUS_BAR : STATUS_SHORT));                       // the ONE status bar
-  const body = Math.max(1, h - head.length - foot.length);
+  const viewport = menuViewport(s.items.length, IDX, h, head.length, foot.length);
   const n = s.items.length;
-  let start = 0;
-  if (n > body) start = Math.max(0, Math.min(n - body, IDX - Math.floor(body / 2)));
   const rows = [];
-  s.items.slice(start, start + body).forEach((it, k) => {
-    const i = start + k, sel = i === IDX;
+  s.items.slice(viewport.startIndex, viewport.startIndex + viewport.bodyRows).forEach((it, k) => {
+    const i = viewport.startIndex + k, sel = i === IDX;
     const pointer = sel ? C.neon + "▶" + C.rs : " ";
     const label = (sel ? C.inv + C.neon : "") + " " + it.label + (sel ? C.rs : "");
     const right = it.right ? "  " + (it.rightColor || C.grey) + it.right + C.rs : "";
@@ -1052,11 +1173,11 @@ function push(s) {
   s.items = s.items.filter(Boolean);
   const cur = screen(); if (cur) cur.idx = IDX;
   SCREENS.push(s); IDX = firstEnabled(s, 0, 1); LOADING = "";
-  draw(); refreshStatus().then(() => draw());
+  draw();
 }
 function pop() {
   if (SCREENS.length > 1) { SCREENS.pop(); IDX = (screen() && screen().idx) || 0; }
-  draw(); refreshStatus().then(() => draw());
+  draw();
 }
 function firstEnabled(s, from, dir) {
   const n = s.items.length;
@@ -1100,6 +1221,8 @@ function promptKey(str, key) {
 // ---- running an external command: hand the terminal over, then take it back
 function suspendInput() {
   if (INPUT_ON) { process.stdin.removeListener("keypress", onKey); INPUT_ON = false; }
+  if (MOUSE_INPUT_ON) { process.stdin.removeListener("data", onMouseData); MOUSE_INPUT_ON = false; }
+  MOUSE_INPUT_BUFFER = "";
   try { process.stdin.setRawMode(false); } catch {}
   process.stdin.pause();
 }
@@ -1110,6 +1233,40 @@ function resumeInput() {
   try { process.stdin.setRawMode(true); } catch {}
   process.stdin.resume();
   if (!INPUT_ON) { process.stdin.on("keypress", onKey); INPUT_ON = true; }
+  if (!MOUSE_INPUT_ON) { process.stdin.on("data", onMouseData); MOUSE_INPUT_ON = true; }
+}
+
+function onMouseData(chunk) {
+  if (!MOUSE_REPORTING) return;
+  const parsed = parseSgrMouseData(MOUSE_INPUT_BUFFER, chunk.toString("utf8"));
+  MOUSE_INPUT_BUFFER = parsed.pending;
+  for (const report of parsed.reports) handleMouseReport(report);
+}
+
+function handleMouseReport(report) {
+  if (MODE !== "menu" || ACTING || report.released) return;
+  const event = classifySgrMouseReport(report);
+  if (!event) return;
+  if (event.type === "wheel") {
+    const next = nextMouseSelection(screen()?.items || [], IDX, event.direction);
+    if (next !== IDX) { IDX = next; draw(); }
+    return;
+  }
+  // Only primary-button clicks activate rows. Motion, middle/right clicks and
+  // additional-button reports never trigger an action.
+  const s = screen();
+  if (!s) return;
+  const h = termHeight();
+  const root = SCREENS.length === 1;
+  const headerRows = buildMenuHeader(s, h, root).length;
+  const hasFooterMessage = !!(LOADING || (FLASH && Date.now() < FLASH.until) || s.footer);
+  const footerRows = 3 + (hasFooterMessage ? 1 : 0);
+  const viewport = menuViewport(s.items.length, IDX, h, headerRows, footerRows);
+  const index = menuItemAtRow(report.y, viewport, s.items.length);
+  if (index === null || s.items[index].disabled) return;
+  IDX = index;
+  draw();
+  activate();
 }
 
 async function busy(fn, opts) {
@@ -1220,12 +1377,15 @@ process.on("exit", releaseMainLock);
 function restoreTerminal() {
   try { process.stdin.setRawMode(false); } catch {}
   if (TTY) {
-    try { process.stdout.write("\x1b[0m\x1b[?7h\x1b[?25h" + (ALT ? "\x1b[?1049l" : "")); } catch {}
+    try { process.stdout.write("\x1b[0m" + mouseTrackingSequence(false) + "\x1b[?7h\x1b[?25h" + (ALT ? "\x1b[?1049l" : "")); } catch {}
     ALT = false;
+    MOUSE_REPORTING = false;
   }
 }
 function quit(code) {
   if (INPUT_ON) { try { process.stdin.removeListener("keypress", onKey); } catch {} INPUT_ON = false; }
+  if (MOUSE_INPUT_ON) { try { process.stdin.removeListener("data", onMouseData); } catch {} MOUSE_INPUT_ON = false; }
+  MOUSE_INPUT_BUFFER = "";
   restoreTerminal();
   out(C.neon + "  WELCOME ARIANIQ — see you next time." + C.rs + (USE_ANSI ? "\x1b[0m" : ""));
   process.exit(code || 0);
@@ -1249,14 +1409,13 @@ function fmtAgo(iso) {
   return s < 90 ? s + "s ago" : s < 5400 ? Math.round(s / 60) + "m ago" : s < 129600 ? Math.round(s / 3600) + "h ago" : Math.round(s / 86400) + "d ago";
 }
 
-async function mainMenu() {
-  const st = await agentStatus();
-  const inst = AGENTS.filter((a) => st[a.id]).length;
-  push({
+function mainMenu() {
+  const menu = {
     title: "X AGENT — MAIN",
     items: [
+      { label: "Coding Agent", right: "Open Codex · Enter", rightColor: C.neon, action: () => startPlainAgent("codex", { skipAuthProbe: true }) },
+      { label: "All Coding Agents", right: "More agents", rightColor: C.cyan, action: codingAgentsMenu },
       { label: "Free Agent", right: "verified free paths first", rightColor: C.neon, action: freeAgentMenu },
-      { label: "Coding Agents", right: `${inst}/${AGENTS.length} installed`, rightColor: C.cyan, action: codingAgentsMenu },
       projectContinuityMenuItem(),
       { label: "Usage / Quota", right: "official sources only", rightColor: C.grey, action: usageMenu },
       { label: "Connectors / MCP", right: "providers · MCP servers", rightColor: C.grey, action: connectorsMenu },
@@ -1268,8 +1427,14 @@ async function mainMenu() {
       { label: "Settings", action: settingsMenu },
       { label: "Exit", action: quit },
     ],
-    footer: launchMode() === "tab" ? "Agents open in their own tab · this menu stays here (Ctrl+Tab to come back)" : "Agents run in this terminal · menu returns when they exit",
-  });
+    footer: launchMode() === "tab" ? (IN_RTL_TERMINAL
+      ? "Agents open in Windows Terminal · Ctrl+Alt+Shift+X returns to this X Agent menu"
+      : "Agents open in their own tab · this menu stays here (Ctrl+Tab to come back)")
+      : IN_RTL_TERMINAL
+        ? "Agents run here · Alt+Left returns to X Agent when an agent is open"
+        : "Agents run in this terminal · menu returns when they exit",
+  };
+  push(menu);
 }
 
 // ---- Free Agent: verified-free first, then account free tiers, then unverified
@@ -1332,15 +1497,25 @@ function agentItem(a, st) {
     action: () => startPlainAgent(a.id),
   };
 }
-async function startPlainAgent(id) {
+async function startPlainAgent(id, options) {
   const a = agentById(id);
-  const st = await agentStatus();
+  let st;
+  if (options && options.skipAuthProbe) {
+    const cached = AGENT_STATUS && Date.now() - AGENT_STATUS_AT < 30000 ? AGENT_STATUS[id] : null;
+    if (cached) st = { [id]: cached };
+    else {
+      const found = await whereCmd(a.cmd);
+      const hit = a.cmd.find((cmd) => found[cmd]) || null;
+      AGENT_PATHS[id] = hit ? found[hit] : null;
+      st = { [id]: hit };
+    }
+  } else st = await agentStatus();
   if (!st[id]) { await ask(`${a.name} is not installed — see Manage Agents (official installer only). [Enter]`); return; }
   // BYOK tools without their own provider: launch through the verified free FCM path instead of a
   // config that asks for a paid key (e.g. Continue asking for an Anthropic key)
   const vo = vrec("agent-" + id);
   if (a.fcmDefault && a.fcm && !(vo && vo.lastOk)) { flash(`${a.name}: using the free FCM provider (no key, no paid fallback)`); return startFcmAgent(id); }
-  const au = await authState(a);
+  const au = options && options.skipAuthProbe ? { state: "unknown", text: "login will be handled by the CLI" } : await authState(a);
   if (au.state === "login" && a.loginCmd) {
     const ans = await ask(`${a.name}: ${au.text}. Open it anyway (it will ask you to log in)? (y/N)`);
     if (!/^y$/i.test(ans)) return;
@@ -1545,49 +1720,70 @@ function lastRun(id) {
   return { text: `${why} (exit ${r.code}${r.secs != null ? ", " + r.secs + "s" : ""}) ${fmtAgo(r.at)}`, bad: true };
 }
 async function changeAgentCwd() {
-  const d = await ask(`Working folder for agents [${SETTINGS.agentCwd || process.cwd()}] (empty = folder where xagent was started):`);
+  const d = await ask(`Folder where agents open files [${agentWorkingDirectory()}] (empty = use the project folder):`);
   if (d === null) return;
   if (d && !fileExists(d)) { await ask("Folder does not exist — nothing changed. [Enter]"); return; }
   SETTINGS.agentCwd = d || undefined; saveSettings();
   pop(); await codingAgentsMenu();
 }
 
-async function codexAccountsMenu() {
-  const st = await agentStatus();
-  if (!st.codex) { await ask("Codex CLI is not installed. [Enter]"); return; }
+function codexAccountsMenu() {
   const accounts = CodexAccounts.accountHomes(HOME);
-  LOADING = "Reading account email and rate limits from each Codex profile (no model calls)"; draw();
+  const items = accounts.map((account) => {
+    return {
+      label: account.label,
+      right: account.exists ? "Enter to open in this terminal" : "profile folder missing",
+      rightColor: account.exists ? C.neon : C.grey,
+      disabled: !account.exists,
+      action: () => launchCodexAccount(account),
+    };
+  });
+  items.push({ label: "Check account status (optional)", right: "read-only · may take a few seconds", rightColor: C.grey,
+    action: () => checkCodexAccountStatuses(accounts) });
+  items.push(back());
+  const menu = { title: "CODEX ACCOUNTS · ISOLATED PROFILES", items,
+    footer: "↑/↓ or J/K to choose · Enter to open in this terminal · Esc back" };
+  push(menu);
+}
+
+async function checkCodexAccountStatuses(accounts) {
+  const menu = screen();
+  if (!menu || menu.title !== "CODEX ACCOUNTS · ISOLATED PROFILES") return;
   const statuses = await Promise.all(accounts.map(async (account) => account.exists
     ? CodexAccounts.readCodexAccountStatus(account.directory).catch(() => ({ ok: false, error: "status unavailable", windows: [] }))
     : null));
-  LOADING = "";
-  const items = accounts.map((account, index) => {
+  if (screen() !== menu) return;
+  const refreshed = accounts.map((account, index) => {
     const status = statuses[index];
     const identity = status && status.email || (account.exists ? status && status.error === "Codex account status timed out" ? "status timed out" : "email unavailable" : "profile folder missing");
     const plan = status && status.planType ? ` · ${status.planType}` : "";
     const usage = status ? CodexAccounts.usageLabel(status) : "not configured";
     const checked = status && status.checkedAt ? ` · checked ${fmtAgo(status.checkedAt)}` : "";
-    return {
-      label: `${account.label} · ${identity}${plan}`,
-      right: `${usage}${checked}`,
+    return { label: `${account.label} · ${identity}${plan}`, right: `${usage}${checked}`,
       rightColor: !account.exists ? C.grey : status && status.ok ? C.neon : C.yellow,
-      disabled: !account.exists,
-      action: () => launchCodexAccount(account),
-    };
+      disabled: !account.exists, action: () => launchCodexAccount(account) };
   });
-  items.push({ label: "Refresh account status", right: "read current data again", rightColor: C.cyan,
-    action: async () => { pop(); await codexAccountsMenu(); } });
-  items.push(back());
-  push({ title: "CODEX ACCOUNTS · ISOLATED PROFILES", items,
-    footer: "Account 1–5 use separate .codex-accountN homes · status from Codex app-server · standard Codex configuration is unchanged" });
+  refreshed.push({ label: "Check account status again", right: "read-only · may take a few seconds", rightColor: C.grey,
+    action: () => checkCodexAccountStatuses(accounts) });
+  refreshed.push(back());
+  menu.items = refreshed;
+  IDX = firstEnabled(menu, Math.min(IDX, menu.items.length - 1), 1);
+  draw();
 }
 
 async function launchCodexAccount(account) {
-  const st = await agentStatus();
-  if (!st.codex) { await ask("Codex CLI is not installed. [Enter]"); return; }
   if (!account || !account.exists || !fileExists(account.directory)) {
     await ask("This Codex account folder is missing; no folder or login was created. [Enter]"); return;
   }
+  const codexAgent = agentById("codex");
+  const cachedCodex = AGENT_STATUS && Date.now() - AGENT_STATUS_AT < 30000 ? AGENT_STATUS.codex : null;
+  let executable = cachedCodex;
+  if (!executable && codexAgent) {
+    const found = await whereCmd(codexAgent.cmd);
+    executable = codexAgent.cmd.find((cmd) => found[cmd]) || null;
+    AGENT_PATHS.codex = executable ? found[executable] : null;
+  }
+  if (!executable) { await ask("Codex CLI is not installed or not on PATH. [Enter]"); return; }
   // Fail closed if a named account aliases the default or another saved home.
   let selectedReal, defaultReal;
   try {
@@ -1601,7 +1797,7 @@ async function launchCodexAccount(account) {
       await ask("Two Codex account names point to the same folder; nothing was launched. [Enter]"); return;
     } } catch { await ask("Could not verify another account folder; nothing was launched. [Enter]"); return; }
   }
-  const launch = CodexAccounts.accountLaunchSpec(account, st.codex);
+  const launch = CodexAccounts.accountLaunchSpec(account, executable);
   const key = `agent-codex-${account.id}` + (PROJECT_SESSION_ID ? `-${PROJECT_SESSION_ID}` : "");
   await startAgent({ key, title: `Codex · ${account.label}`, cmd: launch.cmd,
     env: launch.env, cwd: agentWorkingDirectory(), projectSessionId: PROJECT_SESSION_ID || undefined });
@@ -1615,29 +1811,18 @@ function orderCodingAgents(agents) {
   });
 }
 
-async function codingAgentsMenu() {
-  const st = await agentStatus();
-  const auths = await Promise.all(AGENTS.map((a) => (st[a.id] ? authState(a) : Promise.resolve({ state: "missing", text: "not installed" }))));
-  const items = [{ label: C.cyan + "Working folder" + C.rs, right: (SETTINGS.agentCwd || process.cwd()) + "  (Enter = change)", rightColor: C.cyan, action: changeAgentCwd }];
+function codingAgentsMenu() {
   const ordered = orderCodingAgents(AGENTS);
-  ordered.forEach((a) => {
-    const i = AGENTS.indexOf(a);
-    const au = auths[i], t = tierLabel(a);
-    const live = runningInfo("agent-" + a.id);
-    const lr = lastRun(a.id);
-    const continuity = projectSessionStatus(a.id);
-    const continuityText = continuity.state === "NATIVE_RESUME" ? "native session saved" :
-      continuity.state === "NATIVE_CREATE" ? "native session on first launch" :
-      continuity.state === "HANDOFF_ONLY" ? "text handoff only" : continuity.state === "UNBOUND" ? "unbound project session" : "session state blocked";
-    const right = !st[a.id] ? "not installed" : `${live ? "● RUNNING · " : ""}${lr && lr.bad ? lr.text + " · " : ""}${au.text} · ${continuityText} · ${t.text}`;
-    items.push({
-      label: a.name,
-      right, rightColor: !st[a.id] ? C.grey : live ? C.neon : lr && lr.bad ? C.red : C[AUTH_COLOR[au.state]] || C.grey,
-      action: a.id === "agy" ? antigravityMenu : a.id === "codex" ? codexAccountsMenu : a.id === "claude" ? claudeAccountsMenu : () => startPlainAgent(a.id),
-    });
-  });
+  const items = ordered.map((a) => ({
+    label: a.name,
+    right: a.id === "codex" ? "Choose account" : "Enter to open",
+    rightColor: C.neon,
+    action: a.id === "agy" ? antigravityMenu : a.id === "codex" ? codexAccountsMenu : a.id === "claude" ? claudeAccountsMenu : () => startPlainAgent(a.id),
+  }));
+  items.push({ label: "Change agent launch folder (optional)", right: agentWorkingDirectory(), rightColor: C.cyan, action: changeAgentCwd });
   items.push(back());
-  push({ title: "CODING AGENTS — installed ≠ ready", items, footer: "Status: official status commands, real test results, last exit code. r = refresh" });
+  const menu = { title: "CODING AGENTS", items, footer: "↑/↓ or J/K to choose · Enter to open · r to refresh" };
+  push(menu);
 }
 
 async function claudeAccountsMenu() {
@@ -1889,7 +2074,7 @@ async function settingsMenu() {
   push({
     title: "SETTINGS",
     items: [
-      { label: "Launch mode", right: `${lm} → ${launchMode() === "tab" ? "new Windows Terminal tab" : "same terminal"}`, rightColor: C.neon, action: async () => { const order = ["auto", "tab", "same"]; SETTINGS.launchMode = order[(order.indexOf(lm) + 1) % 3]; saveSettings(); pop(); await settingsMenu(); } },
+      { label: "Launch mode", right: IN_RTL_TERMINAL ? "same terminal (inside Rtl Terminal)" : `${lm} → ${launchMode() === "tab" ? "new Windows Terminal tab" : "same terminal"}`, rightColor: C.neon, disabled: IN_RTL_TERMINAL, action: async () => { const order = ["auto", "tab", "same"]; SETTINGS.launchMode = order[(order.indexOf(lm) + 1) % 3]; saveSettings(); pop(); await settingsMenu(); } },
       { label: "Agent working folder", right: SETTINGS.agentCwd || process.cwd(), rightColor: C.grey, action: async () => { const d = await ask("Folder for non-session agents (empty = where xagent was started):"); if (d === null) return; if (d && !fileExists(d)) { await ask("Folder does not exist. [Enter]"); return; } SETTINGS.agentCwd = d || undefined; saveSettings(); pop(); await settingsMenu(); } },
       { label: "Startup animation (Matrix 0/1 intro)", right: SETTINGS.anim === false ? "off" : "on · silent · any key skips", rightColor: SETTINGS.anim === false ? C.grey : C.neon, action: async () => { SETTINGS.anim = SETTINGS.anim === false; saveSettings(); pop(); await settingsMenu(); } },
       { label: "Plain mode (no colors)", right: SETTINGS.plain ? "ON (restart to apply)" : "off", rightColor: SETTINGS.plain ? C.yellow : C.grey, action: async () => { SETTINGS.plain = !SETTINGS.plain; saveSettings(); pop(); await settingsMenu(); } },
@@ -2640,19 +2825,19 @@ async function main() {
   if (SETTINGS.fcmAutoStart !== false && !process.env.XAGENT_NO_FCM_AUTOSTART) {
     fcmStatus(true).then((s) => { if (s.ok && !s.running) return fcmEnsure(() => {}).then(() => { FCM_CACHE = null; refreshStatus && refreshStatus(true).then(() => draw()); }); }).catch(() => {});
   }
-  cleanOrphanSpecs();
   enterAlt();
-  const warm = agentStatus();   // overlaps the intro: menu opens with data ready
-  if (USE_ANSI && SETTINGS.anim !== false && !process.env.XAGENT_NO_ANIM) {
-    try { await introAnimation(); } catch {}
-  }
-  await warm;
-  await mainMenu();
+  mainMenu();
   startMenuInput();
   draw(true);
+  setImmediate(() => { try { cleanOrphanSpecs(); } catch {} });
+  // The embedded terminal needs an instant usable menu; decorative intro remains
+  // available for standalone X Agent sessions only.
+  if (!IN_RTL_TERMINAL && USE_ANSI && SETTINGS.anim !== false && !process.env.XAGENT_NO_ANIM)
+    void introAnimation().catch(() => {});
   let rz = null;
   process.stdout.on("resize", () => { clearTimeout(rz); rz = setTimeout(() => { if (MODE === "menu") draw(true); }, 40); });
-  setInterval(() => { if (MODE === "menu" && !ACTING && SCREENS.length) refreshStatus(true).then(() => draw()).catch(() => {}); }, 20000).unref();
+  // Status probes spawn several child processes. Keep menu navigation idle and
+  // let the user request a refresh with `r` instead of rescanning every 20s.
   process.on("SIGINT", () => { if (MODE === "busy" || CHILD_RUNNING) return; quit(); });
 }
 
@@ -2660,4 +2845,6 @@ if (require.main === module) main().catch((e) => { console.error("fatal:", e); p
 module.exports = { hostCatalog, buildHostPlan, buildHostSpec, hostSpawnInvocation, findHostExecutable, parseHostRequest, acquireHostLaunch,
   readHostSessionState, recordHostNativeSession, resolveHostNativeSession, buildContextHandoff,
   projectSessionStatus, projectSessionLaunchArgs, transcriptHandoffStatus, orderCodingAgents, mergeEnvironment,
-  projectRootsForAgent: projectRootArgs, agentWorkingDirectory };
+  resolveLaunchMode,
+  projectRootsForAgent: projectRootArgs, agentWorkingDirectory, currentProjectPaths, parseSgrMouseData, menuViewport, menuItemAtRow,
+  buildMenuHeader, classifySgrMouseReport, nextMouseSelection, mouseTrackingSequence };

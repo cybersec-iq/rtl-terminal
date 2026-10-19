@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace RtlTerminal;
@@ -70,6 +71,7 @@ public sealed class PersistentConPtySession : ITerminalTransport
         string? workingDirectory, short columns, short rows)
     {
         try { return Attach(brokerId); }
+        catch (PersistentSessionBusyException) { throw; }
         catch (Exception exception) when (exception is TimeoutException or IOException)
         {
             return Start(brokerId, commandLine, workingDirectory, columns, rows);
@@ -89,7 +91,14 @@ public sealed class PersistentConPtySession : ITerminalTransport
                 return new PersistentConPtySession(id, pipe, reattached);
             }
             catch (TimeoutException) when (until.Elapsed < timeout) { }
-            catch (IOException) when (until.Elapsed < timeout) { }
+            catch (IOException exception) when (until.Elapsed < timeout)
+            {
+                if (IsPipeBusy(id))
+                {
+                    pipe.Dispose();
+                    throw new PersistentSessionBusyException(id, exception);
+                }
+            }
             if (until.Elapsed >= timeout)
             {
                 pipe.Dispose();
@@ -166,6 +175,16 @@ public sealed class PersistentConPtySession : ITerminalTransport
     }
 
     private static string PipeName(string id) => $"RtlTerminal.ConPty.{id}";
+
+    private static bool IsPipeBusy(string id)
+    {
+        var path = @"\\.\pipe\" + PipeName(id);
+        return !WaitNamedPipe(path, 0) && Marshal.GetLastWin32Error() == 121;
+    }
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool WaitNamedPipe(string name, uint timeout);
 
     private static void WriteFrame(Stream stream, byte type, ReadOnlySpan<byte> payload)
     {
@@ -353,3 +372,6 @@ public sealed class PersistentConPtySession : ITerminalTransport
         }
     }
 }
+
+internal sealed class PersistentSessionBusyException(string brokerId, Exception innerException)
+    : IOException($"Persistent session {brokerId} is already connected in another Rtl Terminal window.", innerException);

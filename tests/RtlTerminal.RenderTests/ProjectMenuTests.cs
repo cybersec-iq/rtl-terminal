@@ -19,7 +19,7 @@ internal static partial class Program
             AppTheme.Apply(AppThemeKind.Dark);
             var store = new ProjectSessionStore();
             var created = store.CreateProjectWithFirstSession("Menu project", [directory], "Main", "PowerShell", "xagent", [directory]);
-            var second = store.CreateSession(created.Project.Id, "Review", "PowerShell", "xagent", [directory]);
+            var second = store.CreateSession(created.Project.Id, "Review", "PowerShell", "codex", [directory]);
             window = new MainWindow();
             const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
             var profileType = typeof(MainWindow).GetNestedType("TerminalProfile", BindingFlags.NonPublic)!;
@@ -28,19 +28,26 @@ internal static partial class Program
             var shell = (MenuItem)shellFactory.Invoke(window, ["PowerShell", profile])!;
             var agent = (MenuItem)shell.Items.OfType<MenuItem>().Single(item => item.Header?.ToString() == "X Agents CLI");
             var project = (MenuItem)agent.Items.OfType<MenuItem>().Single(item => item.Header?.ToString() == "Menu project");
-            var session = (MenuItem)project.Items.OfType<MenuItem>().Single(item => item.Header?.ToString() == "Main");
-            AssertMenu(session.Items.OfType<MenuItem>().Select(item => item.Header?.ToString()).ToArray(),
-                "Switch to this session", "+ Add session...", "Rename session...", "Folders", "Delete session...");
+            var session = (MenuItem)project.Items.OfType<MenuItem>().Single(item => item.Header?.ToString() == "Main  [PowerShell]");
+            var sessionContext = (ContextMenu)session.ContextMenu!;
+            AssertMenu(sessionContext.Items.OfType<MenuItem>().Select(item => item.Header?.ToString()).ToArray(),
+                "Switch to this session", "Rename session...", "+ New PowerShell session...", "Folders", "Delete session...");
+            var review = (MenuItem)project.Items.OfType<MenuItem>().Single(item => item.Header?.ToString() == "Review  [PowerShell]");
+            var reviewContext = (ContextMenu)review.ContextMenu!;
+            AssertMenu(reviewContext.Items.OfType<MenuItem>().Select(item => item.Header?.ToString()).ToArray(),
+                "Switch to X Agents CLI", "Switch to this session", "Rename session...", "+ New PowerShell session...", "Folders", "Delete session...");
+            AssertProject(store.GetSessions(created.Project.Id).Single(item => item.Id == second.Id).Agent == "codex",
+                "constructing the session menu changed the saved agent identity");
             AssertMenu(project.Items.OfType<MenuItem>().Select(item => item.Header?.ToString()).ToArray(),
-                "Main", "Review", "+ Add session...", "Manage project");
+                "Main  [PowerShell]", "Review  [PowerShell]", "+ New PowerShell session...", "Manage project");
             var projectManagement = project.Items.OfType<MenuItem>().Single(item => item.Header?.ToString() == "Manage project");
             AssertMenu(projectManagement.Items.OfType<MenuItem>().Select(item => item.Header?.ToString()).ToArray(),
                 "Rename project...", "Folders", "Delete project...");
             var projectFolders = projectManagement.Items.OfType<MenuItem>().Single(item => item.Header?.ToString() == "Folders");
             AssertMenu(projectFolders.Items.OfType<MenuItem>().Select(item => item.Header?.ToString()).ToArray(),
                 Path.GetFileName(directory), "+ Add folder...", "Edit folders...");
-            var sessionFolders = session.Items.OfType<MenuItem>().Single(item => item.Header?.ToString() == "Folders");
-            AssertMenu(sessionFolders.Items.OfType<MenuItem>().Select(item => item.Header?.ToString()).ToArray(),
+            AssertMenu(sessionContext.Items.OfType<MenuItem>().Single(item => item.Header?.ToString() == "Folders")
+                    .Items.OfType<MenuItem>().Select(item => item.Header?.ToString()).ToArray(),
                 Path.GetFileName(directory), "+ Add folder...", "Edit folders...");
             var projectContext = (ContextMenu)project.ContextMenu!;
             AssertMenu(projectContext.Items.OfType<MenuItem>().Select(item => item.Header?.ToString()).ToArray(),
@@ -53,8 +60,35 @@ internal static partial class Program
             tabType.GetProperty("Project")!.SetValue(tab, created.Project);
             var tabMenu = (ContextMenu)typeof(MainWindow).GetMethod("CreateTabContextMenu", flags)!.Invoke(window, [tab])!;
             var sessionsMenu = tabMenu.Items.OfType<MenuItem>().Single(item => item.Header?.ToString() == "Sessions");
-            typeof(MainWindow).GetMethod("PopulateSessionsSubmenu", flags)!.Invoke(window, [tab, sessionsMenu]);
-            AssertMenu(sessionsMenu.Items.OfType<MenuItem>().Select(item => item.Header?.ToString()).ToArray(), "Main", "Review", "+ Add session...");
+            var switchSessionMenu = sessionsMenu.Items.OfType<MenuItem>().Single(item => item.Header?.ToString() == "Switch session");
+            AssertMenu(switchSessionMenu.Items.OfType<MenuItem>().Select(item => item.Header?.ToString()).ToArray(), "Main  [PowerShell]", "Review  [PowerShell]");
+            AssertMenu(sessionsMenu.Items.OfType<MenuItem>().Select(item => item.Header?.ToString()).ToArray(), "Switch session", "+ New PowerShell session...");
+
+            // Exercise a normal menu click against an already-active runtime so the
+            // regression test cannot start or replace a shell/broker process.
+            var activePane = typeof(MainWindow).GetMethod("CreatePane", flags)!.Invoke(window, [profile])!;
+            paneType.GetProperty("PersistentAttachPending")!.SetValue(activePane, true);
+            var activeTab = Activator.CreateInstance(tabType, [activePane])!;
+            tabType.GetProperty("Project")!.SetValue(activeTab, created.Project);
+            tabType.GetProperty("ActiveProjectSession")!.SetValue(activeTab, second);
+            var tabs = (System.Collections.IList)typeof(MainWindow).GetField("_tabs", flags)!.GetValue(window)!;
+            tabs.Add(activeTab);
+            review.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+            AssertProject(store.GetSessions(created.Project.Id).Single(item => item.Id == second.Id).Agent == "codex",
+                "selecting a saved session from the menu rewrote its saved agent identity");
+            var sharedReplacement=Path.Combine(directory,"shared-replacement");
+            var sessionOnly=Path.Combine(directory,"session-only");
+            Directory.CreateDirectory(sharedReplacement);Directory.CreateDirectory(sessionOnly);
+            var customSession=store.CreateSession(created.Project.Id,"Custom","PowerShell","codex",[directory,sessionOnly]);
+            typeof(MainWindow).GetMethod("SaveProjectFolders",flags)!.Invoke(window,[created.Project,new[]{sharedReplacement}]);
+            AssertProject(store.GetProjects().Single(item=>item.Id==created.Project.Id).Paths.SequenceEqual([sharedReplacement],StringComparer.OrdinalIgnoreCase),
+                "project folder edit did not update project roots");
+            AssertProject(store.GetSessions(created.Project.Id).Single(item=>item.Id==created.Session.Id).Paths.SequenceEqual([sharedReplacement],StringComparer.OrdinalIgnoreCase),
+                "project folder edit did not propagate to the first session");
+            AssertProject(store.GetSessions(created.Project.Id).Single(item=>item.Id==second.Id).Paths.SequenceEqual([sharedReplacement],StringComparer.OrdinalIgnoreCase),
+                "project folder edit did not propagate to other sessions");
+            AssertProject(store.GetSessions(created.Project.Id).Single(item=>item.Id==customSession.Id).Paths.SequenceEqual([sharedReplacement,sessionOnly],StringComparer.OrdinalIgnoreCase),
+                "project folder edit did not preserve session-only folders");
             Console.WriteLine("PASS cascading shell/agent/project/session menu hierarchy and project/session management actions");
         }
         finally

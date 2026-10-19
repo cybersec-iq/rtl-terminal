@@ -6,14 +6,10 @@ namespace RtlTerminal;
 
 public partial class GuideWindow : Window
 {
-    private static readonly SolidColorBrush ActiveLanguageBackground =
-        new(Color.FromRgb(25, 112, 168));
-    private static readonly SolidColorBrush InactiveLanguageBackground =
-        new(Color.FromRgb(38, 54, 80));
-
     public GuideWindow()
     {
         InitializeComponent();
+        DialogTheme.ApplyDarkCaption(this);
         ApplyLanguage(GuideLanguage.Persian);
     }
 
@@ -49,15 +45,13 @@ public partial class GuideWindow : Window
         KeysTitle.Text = content.KeysTitle;
         KeysText.Text = content.KeysText;
 
-        PersianButton.Background = language == GuideLanguage.Persian
-            ? ActiveLanguageBackground
-            : InactiveLanguageBackground;
-        ArabicButton.Background = language == GuideLanguage.Arabic
-            ? ActiveLanguageBackground
-            : InactiveLanguageBackground;
-        EnglishButton.Background = language == GuideLanguage.English
-            ? ActiveLanguageBackground
-            : InactiveLanguageBackground;
+        var active = Application.Current?.TryFindResource("DialogAccentBrush") as Brush
+            ?? new SolidColorBrush(AppTheme.TabAccent);
+        var inactive = Application.Current?.TryFindResource("DialogSurfaceBrush") as Brush
+            ?? new SolidColorBrush(Color.FromRgb(38, 54, 80));
+        PersianButton.Background = language == GuideLanguage.Persian ? active : inactive;
+        ArabicButton.Background = language == GuideLanguage.Arabic ? active : inactive;
+        EnglishButton.Background = language == GuideLanguage.English ? active : inactive;
     }
 
     private static GuideContent GetContent(GuideLanguage language) =>

@@ -9,6 +9,7 @@ public partial class UpdateAvailableWindow : Window
         Version latestVersion)
     {
         InitializeComponent();
+        DialogTheme.ApplyDarkCaption(this);
         VersionTextBlock.Text =
             $"Installed: {FormatVersion(currentVersion)}    " +
             $"Available: {FormatVersion(latestVersion)}";

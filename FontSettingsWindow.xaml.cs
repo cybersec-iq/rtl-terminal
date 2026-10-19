@@ -43,6 +43,7 @@ public partial class FontSettingsWindow : Window
         PaneShortcutSettings? shortcuts = null)
     {
         InitializeComponent();
+        DialogTheme.ApplyDarkCaption(this);
         _fontFamilies = Fonts.SystemFontFamilies
             .Select(font => font.Source)
             .Distinct(StringComparer.CurrentCultureIgnoreCase)
@@ -205,7 +206,7 @@ public partial class FontSettingsWindow : Window
 
         if (string.IsNullOrWhiteSpace(family))
         {
-            MessageBox.Show(
+            ThemedMessageBox.Show(
                 this,
                 "Please select a font.",
                 "Rtl Terminal",

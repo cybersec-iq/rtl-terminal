@@ -8,10 +8,88 @@
         MinWidth="780"
         MinHeight="660"
         WindowStartupLocation="CenterOwner"
-        Background="#f4f5f7">
+        Background="{DynamicResource DialogBackgroundBrush}">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="TerminalScrollBar.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+            <Style TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{DynamicResource DialogForegroundBrush}" />
+            </Style>
+            <Style TargetType="TabControl">
+                <Setter Property="Background" Value="{DynamicResource DialogBackgroundBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource DialogForegroundBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource DialogBorderBrush}" />
+            </Style>
+            <Style TargetType="TabItem">
+                <Setter Property="Background" Value="{DynamicResource DialogSurfaceBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource DialogForegroundBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource DialogBorderBrush}" />
+                <Style.Triggers>
+                    <Trigger Property="IsSelected" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource DialogInputBrush}" />
+                        <Setter Property="FontWeight" Value="SemiBold" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+            <Style TargetType="TextBox">
+                <Setter Property="Background" Value="{DynamicResource DialogInputBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource DialogForegroundBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource DialogBorderBrush}" />
+                <Setter Property="CaretBrush" Value="{DynamicResource DialogAccentBrush}" />
+                <Setter Property="SelectionBrush" Value="{DynamicResource DialogAccentBrush}" />
+            </Style>
+            <Style TargetType="ComboBox">
+                <Setter Property="Background" Value="{DynamicResource DialogSurfaceBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource DialogForegroundBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource DialogBorderBrush}" />
+            </Style>
+            <Style TargetType="ComboBoxItem">
+                <Setter Property="Background" Value="{DynamicResource DialogSurfaceBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource DialogForegroundBrush}" />
+                <Style.Triggers>
+                    <Trigger Property="IsHighlighted" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource DialogSelectionBrush}" />
+                    </Trigger>
+                    <Trigger Property="IsSelected" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource DialogAccentBrush}" />
+                        <Setter Property="Foreground" Value="{DynamicResource ChromeStrongForegroundBrush}" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+            <Style TargetType="ListBox">
+                <Setter Property="Background" Value="{DynamicResource DialogInputBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource DialogForegroundBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource DialogBorderBrush}" />
+            </Style>
+            <Style TargetType="ListBoxItem">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="Foreground" Value="{DynamicResource DialogForegroundBrush}" />
+                <Style.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource DialogSelectionBrush}" />
+                    </Trigger>
+                    <Trigger Property="IsSelected" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource DialogAccentBrush}" />
+                        <Setter Property="Foreground" Value="{DynamicResource ChromeStrongForegroundBrush}" />
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+            <Style TargetType="CheckBox">
+                <Setter Property="Foreground" Value="{DynamicResource DialogForegroundBrush}" />
+            </Style>
+            <Style TargetType="Button">
+                <Setter Property="Background" Value="{DynamicResource DialogSurfaceBrush}" />
+                <Setter Property="Foreground" Value="{DynamicResource DialogForegroundBrush}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource DialogBorderBrush}" />
+                <Setter Property="Padding" Value="8,5" />
+            </Style>
+        </ResourceDictionary>
+    </Window.Resources>
     <Grid Margin="20">
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-        <TextBlock Text="Settings" FontSize="25" FontWeight="SemiBold" Foreground="#182033" Margin="0,0,0,16"/>
+        <TextBlock Text="Settings" FontSize="25" FontWeight="SemiBold" Margin="0,0,0,16"/>
         <TabControl x:Name="SettingsTabs" Grid.Row="1" Margin="0,0,0,16">
             <TabItem Header="General">
                 <Grid Margin="16">
@@ -27,7 +105,7 @@
                     <DockPanel Margin="8">
                         <TextBlock DockPanel.Dock="Top"
                                    Margin="2,0,2,8"
-                                   Foreground="#586174"
+                           Foreground="{DynamicResource DialogMutedBrush}"
                                    TextWrapping="Wrap"
                                    Text="Recommended fonts for CMD, PowerShell, terminals and coding that are installed on this Windows." />
                         <ListBox x:Name="StandardFontListBox"
@@ -93,7 +171,7 @@
                     <ComboBoxItem Content="10,000" Tag="10000" />
                 </ComboBox>
                 <TextBlock Margin="0,6,0,0"
-                           Foreground="#697386"
+                           Foreground="{DynamicResource DialogMutedBrush}"
                            FontSize="11"
                            TextWrapping="Wrap"
                            Text="Larger history uses more memory and may make scrolling slower." />
@@ -111,16 +189,16 @@
             <CheckBox x:Name="SplitShortcutCheckBox" Content="Ctrl+Shift+D — Open a new pane" Margin="0,0,0,5" />
             <CheckBox x:Name="NavigateShortcutCheckBox" Content="Ctrl+Shift+Left / Right — Switch panes" Margin="0,0,0,5" />
             <CheckBox x:Name="CloseShortcutCheckBox" Content="Ctrl+Shift+W — Close the active pane (or its last tab)" />
-            <TextBlock Text="Disabled shortcuts are passed to the terminal. Ctrl+W is always passed through." Foreground="#697386" Margin="0,5,0,0" TextWrapping="Wrap" />
+            <TextBlock Text="Disabled shortcuts are passed to the terminal. Ctrl+W is always passed through." Foreground="{DynamicResource DialogMutedBrush}" Margin="0,5,0,0" TextWrapping="Wrap" />
         </StackPanel>
 
         <Border Grid.Row="2"
-                Background="#10151f"
+                Background="{DynamicResource DialogInputBrush}"
                 CornerRadius="8"
                 Padding="16"
                 Margin="0,16,0,16">
             <TextBlock x:Name="PreviewTextBlock"
-                       Foreground="#e6e6e6"
+                       Foreground="{DynamicResource DialogForegroundBrush}"
                        TextWrapping="Wrap"
                        Text="Rtl Terminal  |  ترمینال فارسی  |  1234567890&#x0a;https://github.com/cybersec-iq" />
         </Border>
@@ -131,27 +209,27 @@
                 <Grid Margin="16">
                     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                     <StackPanel Margin="0,0,0,16">
-                        <TextBlock Text="Choose your theme" FontSize="20" FontWeight="SemiBold" Foreground="#182033" />
+                        <TextBlock Text="Choose your theme" FontSize="20" FontWeight="SemiBold" />
                         <TextBlock Text="Use ↑ and ↓ to preview. Changes apply to all terminals only when you choose Apply."
-                                   Margin="0,6,0,0" Foreground="#586174" TextWrapping="Wrap" />
+                                   Margin="0,6,0,0" Foreground="{DynamicResource DialogMutedBrush}" TextWrapping="Wrap" />
                     </StackPanel>
                     <Grid Grid.Row="1">
                         <Grid.ColumnDefinitions><ColumnDefinition Width="240"/><ColumnDefinition Width="20"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                         <ListBox x:Name="ThemeListBox" SelectionChanged="ThemeListBox_SelectionChanged"
-                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" BorderBrush="#d0d5dd"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled" BorderBrush="{DynamicResource DialogBorderBrush}"
                                  AutomationProperties.Name="Color themes">
                             <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="Padding" Value="10,8"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/></Style></ListBox.ItemContainerStyle>
                             <ListBox.ItemTemplate><DataTemplate>
                                 <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="32"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                    <Border Width="22" Height="22" Background="{Binding Swatch}" BorderBrush="#a0a7b2" BorderThickness="1" CornerRadius="4" VerticalAlignment="Center"/>
+                                    <Border Width="22" Height="22" Background="{Binding Swatch}" BorderBrush="{DynamicResource DialogBorderBrush}" BorderThickness="1" CornerRadius="4" VerticalAlignment="Center"/>
                                     <StackPanel Grid.Column="1"><TextBlock Text="{Binding Name}" FontWeight="SemiBold"/><TextBlock Text="{Binding ModeLabel}" FontSize="11" Opacity="0.7" Margin="0,2,0,0"/></StackPanel>
                                 </Grid>
                             </DataTemplate></ListBox.ItemTemplate>
                         </ListBox>
                         <Grid Grid.Column="2">
                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                            <TextBlock Text="Preview" FontWeight="SemiBold" Margin="0,0,0,8" Foreground="#344054"/>
-                            <Border x:Name="ThemePreviewBorder" Grid.Row="1" CornerRadius="8" BorderBrush="#b7bec9" BorderThickness="1" ClipToBounds="True">
+                            <TextBlock Text="Preview" FontWeight="SemiBold" Margin="0,0,0,8"/>
+                            <Border x:Name="ThemePreviewBorder" Grid.Row="1" CornerRadius="8" BorderBrush="{DynamicResource DialogBorderBrush}" BorderThickness="1" ClipToBounds="True">
                                 <DockPanel>
                                     <Border x:Name="ThemePreviewTitleBar" DockPanel.Dock="Top" Padding="14,10" CornerRadius="7,7,0,0">
                                         <TextBlock x:Name="ThemePreviewTitle" Text="›_  Rtl Terminal" FontFamily="Segoe UI" FontSize="12"/>
@@ -164,7 +242,7 @@
                                 </DockPanel>
                             </Border>
                             <TextBlock Grid.Row="2" Text="Your tabs, panes and terminal output stay unchanged while you preview."
-                                       Foreground="#697386" FontSize="12" TextWrapping="Wrap" Margin="0,12,0,0"/>
+                                       Foreground="{DynamicResource DialogMutedBrush}" FontSize="12" TextWrapping="Wrap" Margin="0,12,0,0"/>
                         </Grid>
                     </Grid>
                 </Grid>

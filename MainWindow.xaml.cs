@@ -4,6 +4,7 @@ using System.IO;
 using System.Net.Http;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
@@ -15,12 +16,18 @@ using System.Windows.Media.Imaging;
 using System.Media;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using System.Windows.Interop;
 using Microsoft.Win32;
 
 namespace RtlTerminal;
 
 public partial class MainWindow : Window
 {
+    private const int ReturnToXAgentHotkeyId = 0x4A31;
+    private const int WmHotkey = 0x0312;
+    private const uint ModAlt = 0x0001;
+    private const uint ModControl = 0x0002;
+    private const uint ModShift = 0x0004;
     private readonly object _renderLock = new();
     private readonly DispatcherTimer _renderTimer;
     private readonly DispatcherTimer _resizeTimer;
@@ -30,11 +37,15 @@ public partial class MainWindow : Window
     private readonly AgentCompletionMonitor _agentCompletionMonitor = new();
     private readonly Dictionary<string, int> _sessionCompletionCounts = new(StringComparer.Ordinal);
     private readonly Dictionary<string, long> _savedTranscriptRevisions = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, long> _pendingTranscriptRevisions = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Task<long>> _pendingTranscriptTasks = new(StringComparer.Ordinal);
     private readonly Dictionary<PaneLayout, Grid> _paneLayoutGrids = [];
     private readonly List<string> _temporaryClipboardFiles = [];
     private TerminalTab? _activeTab;
     private bool _renderStartQueued;
+    private bool _initialStartupQueued;
     private bool _updatingContextMenuItem;
+    private bool _tabStripRebuildPending;
     private double _cellWidth = 8.5;
     private double _lineHeight = 18;
     private bool _restoringScrollPosition;
@@ -49,10 +60,16 @@ public partial class MainWindow : Window
     private Key? _pendingContextMenuKey;
     private (int X, int Y, int Button)? _lastReportedMouseCell;
     private TerminalPane? _codexVoicePane;
+    private IntPtr _windowHandle;
+    private HwndSource? _windowSource;
+    private bool _returnToXAgentHotkeyRegistered;
 
     public MainWindow()
     {
         InitializeComponent();
+        Title = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("RTLTERMINAL_COLOR_SCHEME"))
+            ? $"Rtl Terminal Preview — {Environment.GetEnvironmentVariable("RTLTERMINAL_COLOR_SCHEME")}"
+            : $"Rtl Terminal {AppVersion.Display} | AryanIQ";
         WireTerminalView(TerminalTextBox);
         UpdateShortcutLabels();
         LocationChanged += (_, _) => UpdatePaneSizing();
@@ -106,7 +123,7 @@ ApplySavedFontSettings();
         try { await DropIntoPaneAsync(pane, e.Data); }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or
             System.Runtime.InteropServices.COMException or ArgumentException or NotSupportedException or System.ComponentModel.Win32Exception)
-        { MessageBox.Show(this, exception.Message, "Drop", MessageBoxButton.OK, MessageBoxImage.Error); }
+        { ThemedMessageBox.Show(this, exception.Message, "Drop", MessageBoxButton.OK, MessageBoxImage.Error); }
         if (ReferenceEquals(ActivePane, pane)) pane.View.Focus();
     }
 
@@ -129,8 +146,9 @@ ApplySavedFontSettings();
 
     private void Window_Loaded(object sender, RoutedEventArgs e)
     {
+        if (_initialStartupQueued) return;
+        _initialStartupQueued = true;
         RefreshContextMenuIntegrationState();
-        PromptForContextMenuIntegration();
         ActiveView.Focus();
         ActiveView.UpdateLayout();
         Dispatcher.BeginInvoke(
@@ -138,8 +156,9 @@ ApplySavedFontSettings();
             () =>
             {
                 if (!RestoreSavedProjectTabs()) CreateTerminalTab(_defaultProfile);
+                // A first-run modal prompt must never prevent the terminal shell from starting.
+                Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(PromptForContextMenuIntegration));
             });
-        _ = CheckForUpdatesOnStartupAsync();
     }
 
     private bool RestoreSavedProjectTabs()
@@ -225,10 +244,12 @@ ApplySavedFontSettings();
         return pane;
     }
 
-    private void StartPane(TerminalPane pane, string? requestedStartupDirectory, bool showIntroduction = true, string? persistentSessionId = null)
+    private void StartPane(TerminalPane pane, string? requestedStartupDirectory, bool showIntroduction = true,
+        string? persistentSessionId = null, string? restoredTranscript = null, bool startFreshBroker = false)
     {
         var startupDirectory = ResolveStartupDirectory(
             requestedStartupDirectory);
+        pane.StartupDirectory = startupDirectory;
         pane.WslDistribution = pane.Profile == TerminalProfile.Wsl ? WslPathResolver.DefaultDistribution() : null;
         PaneHost.UpdateLayout();
 
@@ -241,15 +262,18 @@ ApplySavedFontSettings();
                 rows,
                 _historySize);
             pane.GridSize = (columns, rows);
+            if (persistentSessionId is not null)
+                Render(pane, pane.Buffer.Process((string.IsNullOrWhiteSpace(restoredTranscript)
+                    ? "[Connecting to saved session...]\r\n"
+                    : restoredTranscript + "\r\n[Connecting to saved session...]\r\n")));
             pane.CancellationTokenSource = new CancellationTokenSource();
             var shellCommand = GetProfileCommand(pane.Profile, showIntroduction, pane.WslDistribution);
             if (persistentSessionId is not null)
             {
-                var persistent = PersistentConPtySession.AttachOrStart(
-                    persistentSessionId, shellCommand, startupDirectory, columns, rows);
-                pane.Session = persistent;
-                pane.PersistentSessionReconnected = persistent.WasReattached;
-                if (persistent.WasReattached) pane.PendingStartupCommand = null;
+                pane.PersistentAttachPending = true;
+                _ = AttachPersistentPaneAsync(pane, persistentSessionId, shellCommand, startupDirectory,
+                    columns, rows, restoredTranscript, startFreshBroker);
+                return;
             }
             else
             {
@@ -270,6 +294,66 @@ ApplySavedFontSettings();
         {
             var errorBuffer = new TerminalBuffer(GetColumns(pane.View), GetRows(pane.View));
             Render(pane, errorBuffer.Process("خطا در اجرای ConPTY:\r\n" + exception.Message));
+        }
+    }
+
+    private async Task AttachPersistentPaneAsync(TerminalPane pane, string sessionId, string shellCommand,
+        string? startupDirectory, short columns, short rows, string? restoredTranscript, bool startFreshBroker)
+    {
+        var cancellationTokenSource = pane.CancellationTokenSource;
+        PersistentConPtySession? persistent = null;
+        try
+        {
+            // Named-pipe attach can wait several seconds and broker startup can take longer.
+            // Keep both operations off the WPF dispatcher so session selection stays responsive.
+            persistent = await Task.Run(() => startFreshBroker
+                ? PersistentConPtySession.Start(sessionId, shellCommand, startupDirectory, columns, rows)
+                : PersistentConPtySession.AttachOrStart(sessionId, shellCommand, startupDirectory, columns, rows)).ConfigureAwait(false);
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (cancellationTokenSource is null || cancellationTokenSource.IsCancellationRequested ||
+                    !ReferenceEquals(pane.CancellationTokenSource, cancellationTokenSource) || pane.IsDisposed ||
+                    !_tabs.Any(tab => tab.Panes.Contains(pane)))
+                {
+                    persistent.Dispose();
+                    return;
+                }
+
+                pane.PersistentAttachPending = false;
+                pane.Session = persistent;
+                pane.PersistentSessionReconnected = persistent.WasReattached;
+                var retryFailedAgentStartup = pane.RetryAgentStartupOnReattach;
+                pane.RetryAgentStartupOnReattach = false;
+                if (persistent.WasReattached && !retryFailedAgentStartup)
+                    pane.PendingStartupCommand = null;
+
+                if (!string.IsNullOrWhiteSpace(restoredTranscript) && pane.Buffer is { } buffer)
+                    Render(pane, buffer.Process(persistent.WasReattached
+                        ? "\r\n[Reconnected to the running session.]\r\n"
+                        : "\r\n[Previous output restored; the agent starts as a new process.]\r\n"));
+
+                _ = Task.Run(() => ReadOutputLoop(pane));
+                QueueViewportResize();
+                pane.View.Focus();
+            });
+        }
+        catch (Exception exception)
+        {
+            persistent?.Dispose();
+            await Dispatcher.InvokeAsync(() =>
+            {
+                if (cancellationTokenSource is null || cancellationTokenSource.IsCancellationRequested ||
+                    !ReferenceEquals(pane.CancellationTokenSource, cancellationTokenSource) || pane.IsDisposed ||
+                    !_tabs.Any(tab => tab.Panes.Contains(pane))) return;
+                pane.PersistentAttachPending = false;
+                pane.CancellationTokenSource = null;
+                cancellationTokenSource.Dispose();
+                var message = exception is PersistentSessionBusyException
+                    ? "این سشن در پنجرهٔ دیگری باز است. بستن پنجرهٔ قبلی فقط رابط را جدا می‌کند؛ سشن Codex/X Agents CLI زنده می‌ماند. بعد روی نام سشن دوباره کلیک کن."
+                    : exception.Message;
+                var errorBuffer = pane.Buffer ?? new TerminalBuffer(GetColumns(pane.View), GetRows(pane.View));
+                Render(pane, errorBuffer.Process("\r\nخطا در اتصال به سشن پایدار:\r\n" + message + "\r\n"));
+            });
         }
     }
 
@@ -306,7 +390,7 @@ ApplySavedFontSettings();
         {
             try { Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true }); }
             catch (Exception exception)
-            { MessageBox.Show(this, exception.Message, "Open link", MessageBoxButton.OK, MessageBoxImage.Error); }
+            { ThemedMessageBox.Show(this, exception.Message, "Open link", MessageBoxButton.OK, MessageBoxImage.Error); }
         };
         view.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler(TerminalTextBox_ScrollChanged));
         view.PreviewKeyDown += TerminalTextBox_PreviewKeyDown;
@@ -325,6 +409,8 @@ ApplySavedFontSettings();
     {
         _projectCheckpointTimer.Stop();
         _agentCompletionMonitor.Dispose();
+        if (_returnToXAgentHotkeyRegistered) UnregisterHotKey(_windowHandle, ReturnToXAgentHotkeyId);
+        _windowSource?.RemoveHook(WindowMessageHook);
         foreach (var tab in _tabs.Where(tab => tab.Project is not null))
         {
             try { PersistAllProjectRuntimes(tab); }
@@ -339,7 +425,37 @@ ApplySavedFontSettings();
         CleanupTemporaryClipboardFiles();
     }
 
-    private void Window_SourceInitialized(object? sender, EventArgs e) => WindowWorkArea.Attach(this);
+    private void Window_SourceInitialized(object? sender, EventArgs e)
+    {
+        WindowWorkArea.Attach(this);
+        _windowHandle = new WindowInteropHelper(this).Handle;
+        _windowSource = HwndSource.FromHwnd(_windowHandle);
+        _windowSource?.AddHook(WindowMessageHook);
+        _returnToXAgentHotkeyRegistered = RegisterHotKey(_windowHandle, ReturnToXAgentHotkeyId,
+            ModControl | ModAlt | ModShift, (uint)KeyInterop.VirtualKeyFromKey(Key.X));
+        if (!_returnToXAgentHotkeyRegistered)
+            Debug.WriteLine("Ctrl+Alt+Shift+X is already registered by another application.");
+    }
+
+    private IntPtr WindowMessageHook(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (message == WmHotkey && wParam.ToInt32() == ReturnToXAgentHotkeyId)
+        {
+            if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
+            Activate();
+            Keyboard.Focus(ActivePane?.View ?? TerminalTextBox);
+            handled = true;
+        }
+        return IntPtr.Zero;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint modifiers, uint virtualKey);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
     private void Window_SizeChanged(object sender, SizeChangedEventArgs e)
     {
@@ -379,11 +495,39 @@ ApplySavedFontSettings();
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         var controlPressed = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+        var altPressed = (Keyboard.Modifiers & ModifierKeys.Alt) != 0;
         var shiftPressed = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+
+        if (!controlPressed && altPressed && GetEffectiveKey(e) == Key.Left && TryReturnToXAgentMenu())
+        {
+            e.Handled = true;
+            return;
+        }
 
         if (controlPressed && shiftPressed && e.Key == Key.T)
         {
             CreateTerminalTab(_defaultProfile);
+            e.Handled = true;
+            return;
+        }
+
+        if (controlPressed && shiftPressed && e.Key == Key.P)
+        {
+            ShowCommandPalette();
+            e.Handled = true;
+            return;
+        }
+
+        if (controlPressed && shiftPressed && e.Key == Key.F)
+        {
+            if (_activeTab is { } tab) FindInTab(tab);
+            e.Handled = true;
+            return;
+        }
+
+        if (controlPressed && shiftPressed && (GetEffectiveKey(e) is Key.PageUp or Key.PageDown))
+        {
+            if (_activeTab is { } tab) MoveTab(tab, GetEffectiveKey(e) == Key.PageUp ? -1 : 1);
             e.Handled = true;
             return;
         }
@@ -438,27 +582,119 @@ ApplySavedFontSettings();
         {
             var project = _projectStore.CreateProject(projectName, [picker.FolderName]);
             var session = _projectStore.CreateSession(project.Id, sessionName, profile.ToString(), "xagent", [picker.FolderName]);
-            OpenProjectSession(project, session);
+            OpenProjectSession(project, session, newlyCreated: true);
         }
         catch (Exception exception) { ShowProjectStoreError(exception); }
     }
 
     private void ProfileMenuButton_Click(object sender, RoutedEventArgs e)
     {
-        var menu = new ContextMenu { Style = (Style)FindResource("DarkContextMenuStyle") };
-        menu.Items.Add(CreateShellMenuItem("Command Prompt", TerminalProfile.CommandPrompt));
-        menu.Items.Add(CreateShellMenuItem("PowerShell", TerminalProfile.PowerShell));
-        if (IsWslAvailable()) menu.Items.Add(CreateShellMenuItem("WSL", TerminalProfile.Wsl));
-
+        var menu = CreateProfileMenu();
         menu.PlacementTarget = sender as UIElement;
         menu.IsOpen = true;
+    }
+
+    private ContextMenu CreateProfileMenu()
+    {
+        var menu = new ContextMenu { Style = (Style)FindResource("DarkContextMenuStyle") };
+        menu.Items.Add(CreateShellMenuItem("Command Prompt", TerminalProfile.CommandPrompt));
+        menu.Items.Add(CreateShellMenuItem("Windows PowerShell", TerminalProfile.PowerShell));
+        if (IsWslAvailable()) menu.Items.Add(CreateShellMenuItem("WSL", TerminalProfile.Wsl));
+        menu.Items.Add(new Separator());
+        var settings = new MenuItem { Header = "Settings" };
+        settings.Click += FontSettingsMenuItem_Click;
+        var palette = new MenuItem { Header = "Command palette", InputGestureText = "Ctrl+Shift+P" };
+        palette.Click += (_, _) => ShowCommandPalette();
+        var about = new MenuItem { Header = "About Rtl Terminal" };
+        about.Click += AboutMenuItem_Click;
+        menu.Items.Add(settings);
+        menu.Items.Add(palette);
+        menu.Items.Add(about);
+        return menu;
     }
 
     private MenuItem CreateShellMenuItem(string header, TerminalProfile profile)
     {
         var shell = new MenuItem { Header = header };
+        var newTab = new MenuItem { Header = "New tab", InputGestureText = profile == _defaultProfile ? "Ctrl+Shift+T" : "" };
+        newTab.Click += (_, _) => CreateTerminalTab(profile);
+        shell.Items.Add(newTab);
+        shell.Items.Add(new Separator());
         shell.Items.Add(CreateAgentMenuItem(profile));
         return shell;
+    }
+
+    private void ShowCommandPalette()
+    {
+        var commands = new List<(string Name, Action Run)>
+        {
+            ("New Command Prompt tab", () => CreateTerminalTab(TerminalProfile.CommandPrompt)),
+            ("New PowerShell tab", () => CreateTerminalTab(TerminalProfile.PowerShell)),
+            ("Split pane", SplitActivePane),
+            ("Settings", () => ShowSettings(openThemeTab: false)),
+            ("About Rtl Terminal", () => AboutMenuItem_Click(this, new RoutedEventArgs()))
+        };
+        if (IsWslAvailable()) commands.Insert(2, ("New WSL tab", () => CreateTerminalTab(TerminalProfile.Wsl)));
+        if (_activeTab is { } active)
+        {
+            commands.Insert(0, ("Find in active tab", () => FindInTab(active)));
+            commands.Insert(1, ("Export active tab text", () => ExportTabText(active)));
+        }
+
+        var input = new TextBox { MinWidth = 420, Margin = new Thickness(0, 0, 0, 8), ToolTip = "Type to filter commands" };
+        input.SetResourceReference(Control.ForegroundProperty, "ChromeForegroundBrush");
+        input.SetResourceReference(Control.BackgroundProperty, "ToolbarBrush");
+        input.SetResourceReference(Control.BorderBrushProperty, "MenuBorderBrush");
+        var results = new ListBox { MinHeight = 190, MaxHeight = 300, DisplayMemberPath = "Item1" };
+        results.SetResourceReference(Control.ForegroundProperty, "ChromeForegroundBrush");
+        results.SetResourceReference(Control.BackgroundProperty, "ToolbarBrush");
+        results.SetResourceReference(Control.BorderBrushProperty, "MenuBorderBrush");
+        void Refresh()
+        {
+            var filtered = commands.Where(command => command.Name.Contains(input.Text, StringComparison.CurrentCultureIgnoreCase)).ToArray();
+            results.ItemsSource = filtered;
+            if (filtered.Length > 0) results.SelectedIndex = 0;
+        }
+        input.TextChanged += (_, _) => Refresh();
+        var body = new StackPanel();
+        body.Children.Add(input);
+        body.Children.Add(results);
+        body.Children.Add(new TextBlock { Text = "Enter to run · Esc to close", Margin = new Thickness(0, 8, 0, 0), Opacity = .72 });
+        var dialog = CreateThemedDialog("Command palette", body, 500, 400);
+        Action? selected = null;
+        input.PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter && results.SelectedItem is ValueTuple<string, Action> entry)
+            {
+                selected = entry.Item2;
+                dialog.DialogResult = true;
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Down && results.Items.Count > 0)
+            {
+                results.Focus();
+                e.Handled = true;
+            }
+        };
+        results.PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter && results.SelectedItem is ValueTuple<string, Action> entry)
+            {
+                selected = entry.Item2;
+                dialog.DialogResult = true;
+                e.Handled = true;
+            }
+        };
+        results.MouseDoubleClick += (_, _) =>
+        {
+            if (results.SelectedItem is ValueTuple<string, Action> entry)
+            {
+                selected = entry.Item2;
+                dialog.DialogResult = true;
+            }
+        };
+        dialog.Loaded += (_, _) => { Refresh(); input.Focus(); };
+        if (dialog.ShowDialog() == true) selected?.Invoke();
     }
 
     private MenuItem CreateAgentMenuItem(TerminalProfile profile)
@@ -559,30 +795,36 @@ ApplySavedFontSettings();
         TerminalProfile profile,
         bool showCompletion = true)
     {
+        var savedProfile = Enum.TryParse<TerminalProfile>(session.Profile, out var parsedProfile)
+            ? parsedProfile
+            : TerminalProfile.CommandPrompt;
+        var profileLabel = savedProfile switch
+        {
+            TerminalProfile.PowerShell => "PowerShell",
+            TerminalProfile.Wsl => "WSL",
+            _ => "CMD"
+        };
         var header = showCompletion && session.CompletionCount > 0
-            ? $"{session.Name}  •  {session.CompletionCount} completed"
-            : session.Name;
-        var sessionItem = new MenuItem { Header = header };
-        var switchTo = new MenuItem { Header = "Switch to this session" };
-        switchTo.Click += (_, _) => OpenProjectSession(project, session);
-        sessionItem.Items.Add(switchTo);
-
-        var addSession = CreateAddSessionMenuItem(project, profile);
-        sessionItem.Items.Add(addSession);
-        var rename = new MenuItem { Header = "Rename session..." };
-        rename.Click += (_, _) => RenameProjectSession(project, session);
-        sessionItem.Items.Add(rename);
-        sessionItem.Items.Add(CreateSessionFoldersMenuItem(project, session));
-        var delete = new MenuItem { Header = "Delete session..." };
-        delete.Click += (_, _) => DeleteSession(project, session);
-        sessionItem.Items.Add(delete);
-        sessionItem.ContextMenu = CreateSessionContextMenu(project, session, profile);
+            ? $"{session.Name}  [{profileLabel}]  •  {session.CompletionCount} completed"
+            : $"{session.Name}  [{profileLabel}]";
+        var sessionItem = new MenuItem
+        {
+            Header = header,
+            ContextMenu = CreateSessionContextMenu(project, session, profile)
+        };
+        sessionItem.Click += (_, _) => OpenProjectSession(project, session);
         return sessionItem;
     }
 
     private MenuItem CreateAddSessionMenuItem(SavedProject project, TerminalProfile profile)
     {
-        var add = new MenuItem { Header = "+ Add session..." };
+        var profileLabel = profile switch
+        {
+            TerminalProfile.PowerShell => "PowerShell",
+            TerminalProfile.Wsl => "WSL",
+            _ => "CMD"
+        };
+        var add = new MenuItem { Header = $"+ New {profileLabel} session..." };
         add.Click += (_, _) => CreateNamedProjectSession(project, profile, "xagent");
         return add;
     }
@@ -613,6 +855,13 @@ ApplySavedFontSettings();
         var menu = new ContextMenu { Style = (Style)FindResource("DarkContextMenuStyle") };
         var open = new MenuItem { Header = "Switch to this session" };
         open.Click += (_, _) => OpenProjectSession(project, session);
+        if (!string.Equals(session.Agent, "xagent", StringComparison.OrdinalIgnoreCase))
+        {
+            var openWithXAgents = new MenuItem { Header = "Switch to X Agents CLI" };
+            openWithXAgents.Click += (_, _) => OpenSessionWithXAgentsCli(project, session);
+            menu.Items.Add(openWithXAgents);
+            menu.Items.Add(new Separator());
+        }
         var rename = new MenuItem { Header = "Rename session..." };
         rename.Click += (_, _) => RenameProjectSession(project, session);
         menu.Items.Add(open);
@@ -644,21 +893,23 @@ ApplySavedFontSettings();
         var defaultName = "Project";
         var name = PromptForTabName("New project", defaultName);
         if (name is null) return;
-        var paths = PickAdditionalFolders("Select project folder");
-        if (paths is null || paths.Count == 0)
+        var picker = new OpenFolderDialog
         {
-            MessageBox.Show(this, "Select at least one project folder.", "New project", MessageBoxButton.OK, MessageBoxImage.Information);
+            Title = "Choose the project folder (this will be used by every session)",
+            InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            Multiselect = false
+        };
+        if (picker.ShowDialog(this) != true)
+        {
             return;
         }
         var sessionName = PromptForTabName("Name the first session", "Main");
         if (sessionName is null) return;
-        var sessionPaths = PickAdditionalFolders("Add folders to the first session?");
-        if (sessionPaths is null) return;
         try
         {
-            var created = _projectStore.CreateProjectWithFirstSession(name, paths, sessionName, profile.ToString(), "xagent",
-                sessionPaths.Count == 0 ? paths : sessionPaths);
-            OpenProjectSession(created.Project, created.Session);
+            var projectPaths = new[] { picker.FolderName };
+            var created = _projectStore.CreateProjectWithFirstSession(name, projectPaths, sessionName, profile.ToString(), "xagent", projectPaths);
+            OpenProjectSession(created.Project, created.Session, newlyCreated: true);
         }
         catch (Exception exception) { ShowProjectStoreError(exception); }
     }
@@ -667,38 +918,17 @@ ApplySavedFontSettings();
     {
         var name = PromptForTabName("New session", "Session " + (_projectStore.GetSessions(project.Id).Count + 1));
         if (name is null) return;
-        var paths = PickAdditionalFolders("Add a folder to this session?");
-        if (paths is null) return;
         try
         {
             var session = _projectStore.CreateSession(project.Id, name, profile.ToString(), agent,
-                paths.Count == 0 ? project.Paths : paths);
-            OpenProjectSession(project, session);
+                project.Paths);
+            OpenProjectSession(project, session, newlyCreated: true);
         }
         catch (Exception exception) { ShowProjectStoreError(exception); }
     }
 
-    private IReadOnlyList<string>? PickAdditionalFolders(string title)
-    {
-        var paths = new List<string>();
-        while (true)
-        {
-            var choice = ShowThemedChoice(title,
-                paths.Count == 0 ? "Add a folder to this project/session?" : "Add another folder?",
-                ["Yes", "No", "Cancel"], defaultIndex: 1);
-            if (choice == 2 || choice < 0) return null;
-            if (choice == 1) return paths;
-            var picker = new OpenFolderDialog
-            {
-                Title = title,
-                InitialDirectory = paths.LastOrDefault() ?? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                Multiselect = false
-            };
-            if (picker.ShowDialog(this) == true) paths.Add(picker.FolderName);
-        }
-    }
-
-    private void OpenProjectSession(SavedProject project, SavedProjectSession session, bool acknowledgeCompletions = true)
+    private void OpenProjectSession(SavedProject project, SavedProjectSession session, bool acknowledgeCompletions = true,
+        bool newlyCreated = false)
     {
         session = _projectStore.GetSessions(project.Id).FirstOrDefault(item => item.Id == session.Id) ?? session;
         if (acknowledgeCompletions)
@@ -724,16 +954,21 @@ ApplySavedFontSettings();
         {
             tab.Project = project;
             tab.ActiveProjectSession = session;
+            var startPane = tab.ActivePane.Session is null && !tab.ActivePane.PersistentAttachPending;
             try { _projectStore.SetActiveSession(project.Id, session.Id); }
             catch (Exception exception) { ShowProjectStoreError(exception); }
             ShowTab(tab);
+            if (startPane && tab.ProjectRuntimes.TryGetValue(runtimeKey, out var activeRuntime))
+                PrepareAndStartProjectRuntime(tab, project, session, activeRuntime);
             return;
         }
 
         if (tab.ActiveProjectSession is { } previous)
         {
-            var previousRuntime = new ProjectSessionRuntime(tab.Panes, tab.LayoutRoot, tab.ActivePane);
-            PersistProjectRuntime(previous, previousRuntime);
+            if (!tab.ProjectRuntimes.TryGetValue(RuntimeKey(previous), out var previousRuntime) ||
+                !ReferenceEquals(previousRuntime.ActivePane, tab.ActivePane))
+                previousRuntime = new ProjectSessionRuntime(tab.Panes, tab.LayoutRoot, tab.ActivePane);
+            QueuePersistProjectRuntime(previous, previousRuntime);
             tab.ProjectRuntimes[RuntimeKey(previous)] = previousRuntime;
         }
         else if (tab.Panes.Any(pane => pane.Session is not null))
@@ -747,38 +982,85 @@ ApplySavedFontSettings();
                 ? tab.Panes[0] : CreatePane(profile);
             runtime = new ProjectSessionRuntime([pane], new PaneLayout(pane), pane);
             tab.ProjectRuntimes[runtimeKey] = runtime;
-            try
-            {
-                var runtimeRoot = AgentEngineDeployment.EnsureDeployed(session.Id);
-                var sessionPaths = session.Paths.Count > 0 ? session.Paths : project.Paths;
-                var handoffPath = GetSessionHandoffPath(runtimeRoot, session.Id);
-                pane.PendingStartupCommand = AgentCommand(session.Agent, profile,
-                    Path.Combine(runtimeRoot, "xagent.js"), sessionPaths, session.Id, handoffPath);
-                _agentCompletionMonitor.WatchSession(session.Id, "*", runtimeRoot);
-                ImportSavedAgentCompletions(session.Id, runtimeRoot);
-                WriteSessionHandoff(session, handoffPath);
-            }
-            catch (Exception exception)
-            {
-                ShowProjectStoreError(exception);
-                pane.PendingStartupCommand = null;
-            }
-            StartPane(pane, (session.Paths.Count > 0 ? session.Paths : project.Paths).FirstOrDefault(),
-                persistentSessionId: session.Id);
-            if (pane.PersistentSessionReconnected) pane.PersistentTranscriptPrefix = session.Transcript;
-            if (!pane.PersistentSessionReconnected && !string.IsNullOrWhiteSpace(session.Transcript) && pane.Buffer is { } buffer)
-                Render(pane, buffer.Process(session.Transcript + "\r\n[Previous terminal output restored; the agent process starts as a new process.]\r\n"));
         }
         tab.Panes = runtime.Panes;
         tab.LayoutRoot = runtime.LayoutRoot;
         tab.ActivePane = runtime.ActivePane;
         tab.ActiveProjectSession = session;
         tab.Project = project;
+        runtime.StartFreshBrokerOnStart = newlyCreated;
         try { _projectStore.SetActiveSession(project.Id, session.Id); }
         catch (Exception exception) { ShowProjectStoreError(exception); }
         tab.CustomTitle = null;
         ShowTab(tab);
+        PrepareAndStartProjectRuntime(tab, project, session, runtime);
         RebuildTabStrip();
+    }
+
+    private async void PrepareAndStartProjectRuntime(TerminalTab tab, SavedProject project, SavedProjectSession session,
+        ProjectSessionRuntime runtime)
+    {
+        if (runtime.IsStarted || runtime.StartPending) return;
+        runtime.StartPending = true;
+        var pane = runtime.ActivePane;
+        try
+        {
+            var prepared = await Task.Run(() =>
+            {
+                var dataRoot = Environment.GetEnvironmentVariable("RTLTERMINAL_DATA_DIR");
+                if (string.IsNullOrWhiteSpace(dataRoot))
+                    dataRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AryanIQ", "Rtl Terminal");
+                var cachedRuntimeRoot = Path.Combine(dataRoot, "XAgentsRuntime", "project-sessions", session.Id);
+                var cachedCodexStatus = Path.Combine(cachedRuntimeRoot, "codex-account-status.js");
+                var retryFailedAgentStartup = session.Agent == "xagent" && Directory.Exists(cachedRuntimeRoot) &&
+                    (!File.Exists(cachedCodexStatus) || !IsXAgentMainProcessRunning(cachedRuntimeRoot));
+                var runtimeRoot = AgentEngineDeployment.EnsureDeployed(session.Id);
+                var sessionPaths = session.Paths.Count > 0 ? session.Paths : project.Paths;
+                var handoffPath = GetSessionHandoffPath(runtimeRoot, session.Id);
+                var command = AgentCommand(session.Agent, pane.Profile,
+                    Path.Combine(runtimeRoot, "xagent.js"), sessionPaths, session.Id, handoffPath);
+                WriteSessionHandoff(session, handoffPath);
+                return (runtimeRoot, command, retryFailedAgentStartup);
+            }).ConfigureAwait(false);
+
+            await Dispatcher.InvokeAsync(() =>
+            {
+                runtime.StartPending = false;
+                runtime.RuntimeRoot = prepared.runtimeRoot;
+                if (!_tabs.Contains(tab) || !tab.ProjectRuntimes.TryGetValue(RuntimeKey(session), out var currentRuntime) ||
+                    !ReferenceEquals(currentRuntime, runtime) || tab.ActiveProjectSession?.Id != session.Id ||
+                    !ReferenceEquals(tab.ActivePane, pane)) return;
+                pane.RetryAgentStartupOnReattach = prepared.retryFailedAgentStartup;
+                pane.PendingStartupCommand = prepared.command;
+                _agentCompletionMonitor.WatchSession(session.Id, "*", prepared.runtimeRoot);
+                ImportSavedAgentCompletions(session.Id, prepared.runtimeRoot);
+                runtime.IsStarted = true;
+                StartPane(pane, (session.Paths.Count > 0 ? session.Paths : project.Paths).FirstOrDefault(),
+                    persistentSessionId: session.Id, restoredTranscript: session.Transcript,
+                    startFreshBroker: runtime.StartFreshBrokerOnStart);
+            });
+        }
+        catch (Exception exception)
+        {
+            await Dispatcher.InvokeAsync(() =>
+            {
+                runtime.StartPending = false;
+                if (!_tabs.Contains(tab) || !ReferenceEquals(tab.ActivePane, pane) || tab.ActiveProjectSession?.Id != session.Id) return;
+                var buffer = pane.Buffer ?? new TerminalBuffer(GetColumns(pane.View), GetRows(pane.View), _historySize);
+                pane.Buffer = buffer;
+                Render(pane, buffer.Process("Could not prepare this session:\r\n" + exception.Message + "\r\n"));
+            });
+        }
+    }
+
+    private void PersistAllProjectRuntimes(TerminalTab tab)
+    {
+        if (tab.Project is not { } project) return;
+        foreach (var session in _projectStore.GetSessions(project.Id))
+            if (tab.ProjectRuntimes.TryGetValue(RuntimeKey(session), out var runtime))
+                PersistProjectRuntime(session, runtime);
+        if (tab.ActiveProjectSession is { } active && tab.ProjectRuntimes.TryGetValue(RuntimeKey(active), out var activeRuntime))
+            PersistProjectRuntime(active, activeRuntime);
     }
 
     private static string RuntimeKey(SavedProjectSession session) => session.Id + ":" + session.Agent;
@@ -801,41 +1083,81 @@ ApplySavedFontSettings();
 
     private void PersistProjectRuntime(SavedProjectSession session, ProjectSessionRuntime runtime)
     {
+        if (_pendingTranscriptTasks.TryGetValue(session.Id, out var pending))
+        {
+            try { pending.GetAwaiter().GetResult(); }
+            catch (Exception exception) { Debug.WriteLine("Pending transcript save failed before final checkpoint: " + exception.Message); }
+            _pendingTranscriptTasks.Remove(session.Id);
+            _pendingTranscriptRevisions.Remove(session.Id);
+        }
         var pane = runtime.ActivePane;
         if (pane.Buffer is null) return;
         var snapshot = pane.Buffer.CaptureSnapshot();
         if (_savedTranscriptRevisions.TryGetValue(session.Id, out var savedRevision) && savedRevision == snapshot.Revision)
             return;
         var transcript = CreateSessionText(snapshot);
-        if (!string.IsNullOrWhiteSpace(pane.PersistentTranscriptPrefix))
-            transcript = pane.PersistentTranscriptPrefix + "\r\n[Output captured after reconnect]\r\n" + transcript;
         _projectStore.UpdateTranscript(session.Id, transcript);
         try
         {
-            var runtimeRoot = AgentEngineDeployment.EnsureDeployed(session.Id);
+            var runtimeRoot = runtime.RuntimeRoot ?? AgentEngineDeployment.EnsureDeployed(session.Id);
             WriteSessionHandoff(session with { Transcript = transcript }, GetSessionHandoffPath(runtimeRoot, session.Id));
         }
         catch (Exception exception) { Debug.WriteLine("Could not update X Agents transcript handoff: " + exception.Message); }
         _savedTranscriptRevisions[session.Id] = snapshot.Revision;
     }
 
+    private void QueuePersistProjectRuntime(SavedProjectSession session, ProjectSessionRuntime runtime)
+    {
+        var buffer = runtime.ActivePane.Buffer;
+        if (buffer is null || _pendingTranscriptRevisions.ContainsKey(session.Id)) return;
+        var snapshot = buffer.CaptureSnapshot();
+        if (_savedTranscriptRevisions.TryGetValue(session.Id, out var savedRevision) && savedRevision == snapshot.Revision) return;
+        _pendingTranscriptRevisions[session.Id] = snapshot.Revision;
+        var persistTask = Task.Run(() =>
+        {
+            var transcript = CreateSessionText(snapshot);
+            _projectStore.UpdateTranscript(session.Id, transcript);
+            var runtimeRoot = runtime.RuntimeRoot ?? AgentEngineDeployment.EnsureDeployed(session.Id);
+            WriteSessionHandoff(session with { Transcript = transcript }, GetSessionHandoffPath(runtimeRoot, session.Id));
+            return snapshot.Revision;
+        });
+        _pendingTranscriptTasks[session.Id] = persistTask;
+        _ = persistTask.ContinueWith(task =>
+        {
+            if (Dispatcher.HasShutdownStarted) return;
+            _ = Dispatcher.BeginInvoke(() =>
+            {
+                if (_pendingTranscriptTasks.TryGetValue(session.Id, out var registeredTask) && ReferenceEquals(registeredTask, persistTask))
+                    _pendingTranscriptTasks.Remove(session.Id);
+                if (_pendingTranscriptRevisions.GetValueOrDefault(session.Id) == snapshot.Revision)
+                    _pendingTranscriptRevisions.Remove(session.Id);
+                if (task.IsCompletedSuccessfully)
+                {
+                    _savedTranscriptRevisions[session.Id] = task.Result;
+                    var latest = runtime.ActivePane.Buffer?.CaptureSnapshot().Revision;
+                    if (latest is { } current && current != task.Result)
+                        QueuePersistProjectRuntime(session, runtime);
+                }
+                else
+                    Debug.WriteLine("Could not save project session transcript: " + (task.Exception?.GetBaseException().Message ?? "unknown error"));
+            });
+        }, TaskScheduler.Default);
+    }
+
     private void CheckpointProjectRuntimes()
     {
         foreach (var tab in _tabs.Where(item => item.Project is not null))
         {
-            try { PersistAllProjectRuntimes(tab); }
+            try
+            {
+                foreach (var session in _projectStore.GetSessions(tab.Project!.Id))
+                    if (tab.ProjectRuntimes.TryGetValue(RuntimeKey(session), out var runtime))
+                        QueuePersistProjectRuntime(session, runtime);
+                if (tab.ActiveProjectSession is { } active && tab.ProjectRuntimes.TryGetValue(RuntimeKey(active), out var activeRuntime))
+                    QueuePersistProjectRuntime(active, activeRuntime);
+            }
             catch (Exception exception) { Debug.WriteLine("Could not checkpoint project session transcript: " + exception.Message); }
         }
-    }
-
-    private void PersistAllProjectRuntimes(TerminalTab tab)
-    {
-        if (tab.Project is not { } project) return;
-        foreach (var session in _projectStore.GetSessions(project.Id))
-            if (tab.ProjectRuntimes.TryGetValue(RuntimeKey(session), out var runtime))
-                PersistProjectRuntime(session, runtime);
-        if (tab.ActiveProjectSession is { } active && tab.ProjectRuntimes.TryGetValue(RuntimeKey(active), out var activeRuntime))
-            PersistProjectRuntime(active, activeRuntime);
     }
 
     private void AgentCompletionMonitor_SessionCompleted(object? sender, AgentSessionCompletedEventArgs e)
@@ -880,17 +1202,105 @@ ApplySavedFontSettings();
     {
         if (agent != "xagent") return null;
         var encodedPaths = Convert.ToBase64String(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(paths)));
-        var quoted = "'" + entry.Replace("'", "''", StringComparison.Ordinal) + "'";
-        var quotedHandoff = "'" + handoffPath.Replace("'", "''", StringComparison.Ordinal) + "'";
+        var runtimeRoot = Path.GetDirectoryName(entry) ?? throw new InvalidOperationException("X Agents runtime path is invalid.");
+        var commandScript = Path.Combine(runtimeRoot, "start-xagent.cmd");
+        var powerShellScript = Path.Combine(runtimeRoot, "start-xagent.ps1");
+        var commandAlias = Path.Combine(runtimeRoot, "xagent.cmd");
+        var handoffRelativePath = Path.GetRelativePath(runtimeRoot, handoffPath);
+        File.WriteAllText(commandAlias, string.Join("\r\n", new[]
+        {
+            "@echo off",
+            "set \"XAGENT_NO_FCM_AUTOSTART=1\"",
+            "set \"XAGENT_RTLTERMINAL=1\"",
+            "set \"XAGENT_PROJECT_PATHS_B64=" + encodedPaths + "\"",
+            "set \"XAGENT_PROJECT_PATHS_FILE=%~dp0run\\project-paths.json\"",
+            "set \"XAGENT_PROJECT_SESSION_ID=" + sessionId + "\"",
+            "set \"XAGENT_TRANSCRIPT_HANDOFF_FILE=%~dp0" + handoffRelativePath.Replace('/', '\\') + "\"",
+            "node \"%~dp0" + Path.GetFileName(entry) + "\" %*",
+            "exit /b %ERRORLEVEL%"
+        }) + "\r\n", new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        File.WriteAllText(commandScript, string.Join("\r\n", new[]
+        {
+            "@echo off",
+            "chcp 65001 >nul",
+            "set \"PATH=%~dp0;%PATH%\"",
+            "call \"%~dp0xagent.cmd\"",
+            "exit /b %ERRORLEVEL%"
+        }) + "\r\n", new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        var powerShellQuote = (string value) => "'" + value.Replace("'", "''", StringComparison.Ordinal) + "'";
+        var powerShell = string.Join("\r\n", new[]
+        {
+            "$ErrorActionPreference = 'Stop'",
+            "$env:PATH = $PSScriptRoot + [IO.Path]::PathSeparator + $env:PATH",
+            "$env:XAGENT_NO_FCM_AUTOSTART = '1'",
+            "$env:XAGENT_RTLTERMINAL = '1'",
+            "$env:XAGENT_PROJECT_PATHS_B64 = " + powerShellQuote(encodedPaths),
+            "$env:XAGENT_PROJECT_PATHS_FILE = Join-Path $PSScriptRoot 'run\\project-paths.json'",
+            "$env:XAGENT_PROJECT_SESSION_ID = " + powerShellQuote(sessionId),
+            "$env:XAGENT_TRANSCRIPT_HANDOFF_FILE = Join-Path $PSScriptRoot " + powerShellQuote(handoffRelativePath),
+            "& node (Join-Path $PSScriptRoot " + powerShellQuote(Path.GetFileName(entry)) + ")"
+        }) + "\r\n";
+        File.WriteAllText(powerShellScript, powerShell, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+        var quotedPowerShellScript = "'" + powerShellScript.Replace("'", "''", StringComparison.Ordinal) + "'";
         return profile switch
         {
-            TerminalProfile.PowerShell => "$env:XAGENT_NO_FCM_AUTOSTART='1'; $env:XAGENT_PROJECT_PATHS_B64='" + encodedPaths + "'; $env:XAGENT_PROJECT_SESSION_ID='" + sessionId + "'; $env:XAGENT_TRANSCRIPT_HANDOFF_FILE=" + quotedHandoff + "; node " + quoted,
-            TerminalProfile.Wsl => "powershell.exe -NoLogo -NoProfile -Command \"$env:XAGENT_NO_FCM_AUTOSTART='1'; $env:XAGENT_PROJECT_PATHS_B64='" + encodedPaths + "'; $env:XAGENT_PROJECT_SESSION_ID='" + sessionId + "'; $env:XAGENT_TRANSCRIPT_HANDOFF_FILE=" + quotedHandoff + "; node '" + entry.Replace("'", "''", StringComparison.Ordinal) + "'\"",
-            _ => "set XAGENT_NO_FCM_AUTOSTART=1 && set XAGENT_PROJECT_PATHS_B64=" + encodedPaths + " && set XAGENT_PROJECT_SESSION_ID=" + sessionId + " && set \"XAGENT_TRANSCRIPT_HANDOFF_FILE=" + handoffPath + "\" && node \"" + entry.Replace("\"", "\\\"", StringComparison.Ordinal) + "\""
+            TerminalProfile.PowerShell => "& " + quotedPowerShellScript,
+            TerminalProfile.Wsl => "powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File \"" + powerShellScript.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"",
+            _ => "call \"" + commandScript + "\""
         };
     }
 
-    private void ShowProjectStoreError(Exception exception) => MessageBox.Show(this,
+    private bool TryReturnToXAgentMenu()
+    {
+        var tab = _activeTab;
+        var session = tab?.ActiveProjectSession;
+        if (tab is null || session is null || !string.Equals(session.Agent, "xagent", StringComparison.OrdinalIgnoreCase) ||
+            !tab.ProjectRuntimes.TryGetValue(RuntimeKey(session), out var runtime) || string.IsNullOrWhiteSpace(runtime.RuntimeRoot) ||
+            ActiveSession is null)
+            return false;
+
+        var markerPath = Path.Combine(runtime.RuntimeRoot, "run", "xagent.child-active.json");
+        try
+        {
+            using var marker = JsonDocument.Parse(File.ReadAllText(markerPath));
+            if (!marker.RootElement.TryGetProperty("pid", out var pidElement) || !pidElement.TryGetInt32(out var pid) || pid <= 0 ||
+                !marker.RootElement.TryGetProperty("startedAt", out var startedElement) || !startedElement.TryGetDateTimeOffset(out var startedAt))
+                return false;
+            using var child = Process.GetProcessById(pid);
+            if (child.HasExited) return false;
+            if (Math.Abs((child.StartTime.ToUniversalTime() - startedAt.UtcDateTime).TotalSeconds) > 15) return false;
+            ActiveSession.Write("\x03");
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or JsonException or ArgumentException or InvalidOperationException or
+            System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsXAgentMainProcessRunning(string runtimeRoot)
+    {
+        var lockPath = Path.Combine(runtimeRoot, "run", "xagent.main.lock");
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(lockPath));
+            var root = document.RootElement;
+            if (!root.TryGetProperty("pid", out var pidElement) || !pidElement.TryGetInt32(out var pid) || pid <= 0 ||
+                !root.TryGetProperty("startedAt", out var startedElement) || !startedElement.TryGetDateTimeOffset(out var lockStarted))
+                return false;
+
+            using var process = Process.GetProcessById(pid);
+            if (process.HasExited || !process.ProcessName.Equals("node", StringComparison.OrdinalIgnoreCase)) return false;
+            return Math.Abs((process.StartTime.ToUniversalTime() - lockStarted.UtcDateTime).TotalSeconds) < 30;
+        }
+        catch (Exception exception) when (exception is IOException or JsonException or ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    private void ShowProjectStoreError(Exception exception) => ThemedMessageBox.Show(this,
         "Project/session data could not be saved.\r\n" + exception.Message,
         "Project storage", MessageBoxButton.OK, MessageBoxImage.Error);
 
@@ -922,7 +1332,7 @@ ApplySavedFontSettings();
     {
         if (ActiveBuffer is null)
         {
-            MessageBox.Show(
+ThemedMessageBox.Show(
                 this,
                 "There is no active terminal session to export.",
                 "Export session",
@@ -956,7 +1366,7 @@ ApplySavedFontSettings();
                 UnauthorizedAccessException or
                 NotSupportedException)
         {
-            MessageBox.Show(
+            ThemedMessageBox.Show(
                 this,
                 $"The session could not be exported.{Environment.NewLine}{exception.Message}",
                 "Export session",
@@ -978,7 +1388,7 @@ ApplySavedFontSettings();
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or System.ComponentModel.Win32Exception)
         {
-            MessageBox.Show(this, exception.Message, "HTML preview", MessageBoxButton.OK, MessageBoxImage.Error);
+            ThemedMessageBox.Show(this, exception.Message, "HTML preview", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
 
@@ -1360,7 +1770,7 @@ ApplySavedFontSettings();
 
         if (ActivePane is not { Session: { HasCodexProcess: true } session } pane)
         {
-            MessageBox.Show(this, "برای Voice باید نشست فعال داخل Codex CLI باشد.", "حالت گفتار Codex", MessageBoxButton.OK, MessageBoxImage.Information);
+            ThemedMessageBox.Show(this, "برای Voice باید نشست فعال داخل Codex CLI باشد.", "حالت گفتار Codex", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -1375,7 +1785,7 @@ ApplySavedFontSettings();
     {
         if (ActivePane is not { Session: { HasCodexProcess: true } session })
         {
-            MessageBox.Show(this, "برای کپی آخرین پاسخ، نشست فعال باید داخل Codex CLI باشد.", "کپی گزارش Codex", MessageBoxButton.OK, MessageBoxImage.Information);
+            ThemedMessageBox.Show(this, "برای کپی آخرین پاسخ، نشست فعال باید داخل Codex CLI باشد.", "کپی گزارش Codex", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -1420,24 +1830,13 @@ ApplySavedFontSettings();
         await CheckForUpdatesAsync(manual: true);
     }
 
-    private async Task CheckForUpdatesOnStartupAsync()
-    {
-        // Let terminal startup finish before performing optional network I/O.
-        await Task.Delay(TimeSpan.FromSeconds(1.5));
-
-        if (!IsLoaded)
-            return;
-
-        await CheckForUpdatesAsync(manual: false);
-    }
-
     private async Task CheckForUpdatesAsync(bool manual)
     {
         if (_updateCheckInProgress)
         {
             if (manual)
             {
-                MessageBox.Show(
+                ThemedMessageBox.Show(
                     this,
                     "An update check is already in progress.",
                     "Check for updates",
@@ -1463,7 +1862,7 @@ ApplySavedFontSettings();
             {
                 if (manual)
                 {
-                    MessageBox.Show(
+                    ThemedMessageBox.Show(
                         this,
                         $"Rtl Terminal {result.CurrentVersion.ToString(3)} is up to date.",
                         "Check for updates",
@@ -1492,7 +1891,7 @@ ApplySavedFontSettings();
         {
             if (manual)
             {
-                MessageBox.Show(
+                ThemedMessageBox.Show(
                     this,
                     "Rtl Terminal could not check GitHub for updates.\n\n" +
                     exception.Message,
@@ -1547,7 +1946,7 @@ ApplySavedFontSettings();
             exception is InvalidOperationException or
                 System.ComponentModel.Win32Exception)
         {
-            MessageBox.Show(
+            ThemedMessageBox.Show(
                 this,
                 "The update page could not be opened.\n\n" + exception.Message,
                 "Rtl Terminal update",
@@ -1558,7 +1957,7 @@ ApplySavedFontSettings();
 
     private void AboutMenuItem_Click(object sender, RoutedEventArgs e)
     {
-        MessageBox.Show(
+        ThemedMessageBox.Show(
             this,
             """
             Rtl Terminal
@@ -1593,7 +1992,7 @@ ApplySavedFontSettings();
         }
         catch (Exception exception)
         {
-            MessageBox.Show(
+            ThemedMessageBox.Show(
                 this,
                 "تغییر منوی راست‌کلیک انجام نشد." +
                 Environment.NewLine +
@@ -1614,7 +2013,7 @@ ApplySavedFontSettings();
         if (ContextMenuIntegration.HasAnsweredInitialPrompt())
             return;
 
-        var result = MessageBox.Show(
+        var result = ThemedMessageBox.Show(
             this,
             "آیا گزینه «Open in AryanIQ Rtl Terminal» به منوی راست‌کلیک پوشه‌ها اضافه شود؟",
             "RtlTerminal",
@@ -1628,7 +2027,7 @@ ApplySavedFontSettings();
         }
         catch (Exception exception)
         {
-            MessageBox.Show(
+            ThemedMessageBox.Show(
                 this,
                 "افزودن منوی راست‌کلیک انجام نشد." +
                 Environment.NewLine +
@@ -1804,7 +2203,7 @@ ApplySavedFontSettings();
         return required.Width <= width + .5 && required.Height <= height + .5;
     }
 
-    private void ShowPaneSpaceMessage() => MessageBox.Show(this,
+    private void ShowPaneSpaceMessage() => ThemedMessageBox.Show(this,
         "There is not enough room for all panes. Enlarge the window and try again.",
         "Split terminals", MessageBoxButton.OK, MessageBoxImage.Information);
 
@@ -2105,14 +2504,40 @@ ApplySavedFontSettings();
             InputGestureText = _paneShortcuts.Split ? "Ctrl+Shift+D" : ""
         };
         split.Click += SplitTabMenuItem_Click;
+        var duplicate = new MenuItem
+        {
+            Header = "Duplicate tab",
+            ToolTip = "Open a fresh shell with the same profile and folder; the running process is not copied."
+        };
+        duplicate.Click += (_, _) => DuplicateTab(tab);
+        var moveTab = new MenuItem { Header = "Move tab" };
+        var tabIndex = _tabs.IndexOf(tab);
+        var moveLeft = new MenuItem { Header = "Move tab left", InputGestureText = "Ctrl+Shift+PageUp", IsEnabled = tabIndex > 0 };
+        moveLeft.Click += (_, _) => MoveTab(tab, -1);
+        var moveRight = new MenuItem { Header = "Move tab right", InputGestureText = "Ctrl+Shift+PageDown", IsEnabled = tabIndex >= 0 && tabIndex < _tabs.Count - 1 };
+        moveRight.Click += (_, _) => MoveTab(tab, 1);
+        moveTab.Items.Add(moveLeft);
+        moveTab.Items.Add(moveRight);
+        var find = new MenuItem { Header = "Find", InputGestureText = "Ctrl+Shift+F" };
+        find.Click += (_, _) => FindInTab(tab);
+        var export = new MenuItem { Header = "Export text..." };
+        export.Click += (_, _) => ExportTabText(tab);
         var join = new MenuItem
         {
             Header = "Show side by side with the current tab",
             IsEnabled = !ReferenceEquals(tab, _activeTab)
         };
         join.Click += (_, _) => JoinTab(tab);
-        var close = new MenuItem { Header = "Close tab" };
-        close.Click += (_, _) => CloseTab(tab);
+        var close = new MenuItem { Header = "Close" };
+        var closeTab = new MenuItem { Header = "Close tab" };
+        closeTab.Click += (_, _) => CloseTab(tab);
+        var closeOthers = new MenuItem { Header = "Close other tabs", IsEnabled = _tabs.Count > 1 };
+        closeOthers.Click += (_, _) => CloseOtherTabs(tab);
+        var closeRight = new MenuItem { Header = "Close tabs to the right", IsEnabled = tabIndex >= 0 && tabIndex < _tabs.Count - 1 };
+        closeRight.Click += (_, _) => CloseTabsToRight(tab);
+        close.Items.Add(closeTab);
+        close.Items.Add(closeOthers);
+        close.Items.Add(closeRight);
         if (tab.Project is not null)
         {
             var project = new MenuItem { Header = "Project" };
@@ -2123,16 +2548,113 @@ ApplySavedFontSettings();
             project.Items.Add(CreateProjectDeleteMenuItem(tab.Project));
             menu.Items.Add(project);
 
-            var sessions = new MenuItem { Header = "Sessions" };
+            var manageSessions = new MenuItem { Header = "Sessions" };
+            var sessions = new MenuItem { Header = "Switch session" };
+            // WPF does not show a submenu arrow for an empty MenuItem. Populate once
+            // before display, then refresh whenever it opens so saved sessions are
+            // selectable on the first click.
+            PopulateSessionsSubmenu(tab, sessions);
             sessions.SubmenuOpened += (_, _) => PopulateSessionsSubmenu(tab, sessions);
-            menu.Items.Add(sessions);
+            manageSessions.Items.Add(sessions);
+            manageSessions.Items.Add(CreateAddSessionMenuItem(tab.Project, tab.Profile));
+            if (tab.ActiveProjectSession is { } activeSession)
+            {
+                var sessionRename = new MenuItem { Header = "Rename session..." };
+                sessionRename.Click += (_, _) => RenameProjectSession(tab.Project, activeSession);
+                manageSessions.Items.Add(sessionRename);
+                manageSessions.Items.Add(CreateSessionFoldersMenuItem(tab.Project, activeSession));
+                var sessionDelete = new MenuItem { Header = "Delete session..." };
+                sessionDelete.Click += (_, _) => DeleteSession(tab.Project, activeSession);
+                manageSessions.Items.Add(sessionDelete);
+            }
+            menu.Items.Add(manageSessions);
         }
         else menu.Items.Add(rename);
         menu.Items.Add(new Separator());
-        menu.Items.Add(split); menu.Items.Add(join);
+        menu.Items.Add(duplicate);
+        menu.Items.Add(split);
+        menu.Items.Add(moveTab);
+        menu.Items.Add(join);
+        menu.Items.Add(find);
+        menu.Items.Add(export);
         menu.Items.Add(new Separator()); menu.Items.Add(CreateTabColorMenu(tab));
         menu.Items.Add(new Separator()); menu.Items.Add(close);
         return menu;
+    }
+
+    private void DuplicateTab(TerminalTab tab)
+    {
+        if (!_tabs.Contains(tab)) return;
+        var title = tab.CustomTitle is { Length: > 0 } customTitle
+            ? $"{customTitle} (copy)"
+            : tab.Project is not null ? $"{tab.Title} (copy)" : null;
+        CreateTerminalTab(tab.Profile, tab.ActivePane.StartupDirectory, title);
+    }
+
+    private void MoveTab(TerminalTab tab, int direction)
+    {
+        var index = _tabs.IndexOf(tab);
+        var target = index + direction;
+        if (index < 0 || target < 0 || target >= _tabs.Count) return;
+        _tabs.RemoveAt(index);
+        _tabs.Insert(target, tab);
+        RebuildTabStrip();
+        SelectTab(tab);
+    }
+
+    private void CloseOtherTabs(TerminalTab keep)
+    {
+        if (!_tabs.Contains(keep)) return;
+        foreach (var tab in _tabs.Where(tab => !ReferenceEquals(tab, keep)).ToArray()) CloseTab(tab);
+        SelectTab(keep);
+    }
+
+    private void CloseTabsToRight(TerminalTab keep)
+    {
+        var index = _tabs.IndexOf(keep);
+        if (index < 0) return;
+        foreach (var tab in _tabs.Skip(index + 1).ToArray()) CloseTab(tab);
+        SelectTab(keep);
+    }
+
+    private void FindInTab(TerminalTab tab)
+    {
+        if (!_tabs.Contains(tab)) return;
+        var query = PromptForTabName("Find in tab", "");
+        if (string.IsNullOrWhiteSpace(query)) return;
+        SelectTab(tab);
+        if (!tab.ActivePane.View.FindNext(query))
+            ThemedMessageBox.Show(this, $"No match found for \"{query}\" in the terminal history.", "Find", MessageBoxButton.OK, MessageBoxImage.Information);
+        else
+            tab.ActivePane.View.Focus();
+    }
+
+    private void ExportTabText(TerminalTab tab)
+    {
+        if (!_tabs.Contains(tab) || tab.ActivePane.Buffer is not { } buffer)
+        {
+            ThemedMessageBox.Show(this, "There is no terminal text to export.", "Export text", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var safeName = string.Concat(tab.Title.Select(ch => Path.GetInvalidFileNameChars().Contains(ch) ? '_' : ch));
+        var dialog = new SaveFileDialog
+        {
+            Title = "Export tab text",
+            Filter = "Text files (*.txt)|*.txt|All files (*.*)|*.*",
+            DefaultExt = ".txt",
+            AddExtension = true,
+            FileName = $"{(string.IsNullOrWhiteSpace(safeName) ? "terminal" : safeName)}-{DateTime.Now:yyyyMMdd-HHmmss}.txt"
+        };
+        if (dialog.ShowDialog(this) != true) return;
+        try
+        {
+            File.WriteAllText(dialog.FileName, CreateSessionText(buffer.CaptureSnapshot()), new UTF8Encoding(false));
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            ThemedMessageBox.Show(this, $"The tab text could not be exported.{Environment.NewLine}{exception.Message}", "Export text", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
     }
 
     private void PopulateSessionsSubmenu(TerminalTab tab, MenuItem parent)
@@ -2152,9 +2674,6 @@ ApplySavedFontSettings();
 
         foreach (var session in savedSessions)
             parent.Items.Add(CreateProjectSessionMenuItem(project, session, tab.Profile));
-        var add = CreateAddSessionMenuItem(project, tab.Profile);
-        parent.Items.Add(new Separator());
-        parent.Items.Add(add);
     }
 
     private MenuItem CreateProjectFoldersMenuItem(TerminalTab tab)
@@ -2196,11 +2715,7 @@ ApplySavedFontSettings();
             Multiselect = false
         };
         if (picker.ShowDialog(this) != true || project.Paths.Contains(picker.FolderName, StringComparer.OrdinalIgnoreCase)) return;
-        project = project with { Paths = project.Paths.Append(picker.FolderName).ToArray() };
-        _projectStore.UpdateProject(project);
-        var tab = _tabs.FirstOrDefault(item => item.Project?.Id == project.Id);
-        if (tab is not null) tab.Project = project;
-        RebuildTabStrip();
+        SaveProjectFolders(project, project.Paths.Append(picker.FolderName).ToArray());
     }
 
     private void OpenSessionWithXAgentsCli(SavedProject project, SavedProjectSession session)
@@ -2212,7 +2727,7 @@ ApplySavedFontSettings();
                 // Save the prior engine's visible transcript before changing the engine key.
                 var projectTab = _tabs.FirstOrDefault(item => item.Project?.Id == project.Id);
                 if (projectTab is not null && projectTab.ProjectRuntimes.TryGetValue(RuntimeKey(session), out var runtime))
-                    PersistProjectRuntime(session, runtime);
+                    QueuePersistProjectRuntime(session, runtime);
                 session = session with { Agent = "xagent" };
                 _projectStore.UpdateSession(session);
             }
@@ -2253,10 +2768,39 @@ ApplySavedFontSettings();
     {
         var paths = EditFolderPaths(project.Paths, "Project folders");
         if (paths is null) return;
-        project = project with { Paths = paths };
+        SaveProjectFolders(project, paths);
+    }
+
+    private void SaveProjectFolders(SavedProject project, IReadOnlyList<string> paths)
+    {
+        var previousPaths = project.Paths.ToArray();
+        var updatedPaths = paths.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        project = project with { Paths = updatedPaths };
         _projectStore.UpdateProject(project);
+        foreach (var session in _projectStore.GetSessions(project.Id))
+        {
+            // Empty session paths explicitly inherit the project's roots. For sessions
+            // with their own roots, replace the old shared roots and retain only their
+            // session-specific additions.
+            if (session.Paths.Count == 0) continue;
+            var sessionOnlyPaths = session.Paths
+                .Where(path => !previousPaths.Contains(path, StringComparer.OrdinalIgnoreCase));
+            var mergedPaths = updatedPaths.Concat(sessionOnlyPaths)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if (!session.Paths.SequenceEqual(mergedPaths, StringComparer.OrdinalIgnoreCase))
+                _projectStore.UpdateSession(session with { Paths = mergedPaths });
+        }
         var tab = _tabs.FirstOrDefault(item => item.Project?.Id == project.Id);
-        if (tab is not null) tab.Project = project;
+        if (tab is not null)
+        {
+            tab.Project = project;
+            if (tab.ActiveProjectSession is { } active)
+            {
+                var refreshed = _projectStore.GetSessions(project.Id).FirstOrDefault(item => item.Id == active.Id) ?? active;
+                tab.ActiveProjectSession = refreshed;
+                ApplyProjectFoldersToRuntime(tab, project, refreshed);
+            }
+        }
         RebuildTabStrip();
     }
 
@@ -2370,8 +2914,37 @@ ApplySavedFontSettings();
         if (tab?.ActiveProjectSession?.Id == session.Id)
         {
             tab.ActiveProjectSession = updated;
-            // The running shell/agent keeps its original working directory until it is
-            // restarted. Persist the new roots now; the next process launch reads them.
+            ApplyProjectFoldersToRuntime(tab, project, updated);
+        }
+        // Tab context menus are attached to the tab-strip buttons. Rebuild them so
+        // reopening the session's Folders submenu reflects the saved paths immediately.
+        RebuildTabStrip();
+    }
+
+    private static void ApplyProjectFoldersToRuntime(TerminalTab tab, SavedProject project, SavedProjectSession session)
+    {
+        if (!string.Equals(session.Agent, "xagent", StringComparison.OrdinalIgnoreCase) ||
+            !tab.ProjectRuntimes.TryGetValue(RuntimeKey(session), out var runtime) ||
+            string.IsNullOrWhiteSpace(runtime.RuntimeRoot)) return;
+
+        // This manifest lets the still-running X Agent manager use newly saved roots
+        // for its next child launch without restarting the project shell/session.
+        // A provider TUI already in progress has its own immutable launch arguments.
+        var paths = session.Paths.Count > 0 ? session.Paths : project.Paths;
+        var runDirectory = Path.Combine(runtime.RuntimeRoot, "run");
+        var manifest = Path.Combine(runDirectory, "project-paths.json");
+        var temporary = manifest + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            Directory.CreateDirectory(runDirectory);
+            File.WriteAllText(temporary, JsonSerializer.Serialize(new { schemaVersion = 1, paths }) + Environment.NewLine,
+                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+            File.Move(temporary, manifest, overwrite: true);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+        {
+            try { if (File.Exists(temporary)) File.Delete(temporary); } catch { }
+            Debug.WriteLine("Could not hot-update X Agents project folders: " + exception.Message);
         }
     }
 
@@ -2389,17 +2962,49 @@ ApplySavedFontSettings();
         list.SetResourceReference(Control.BorderBrushProperty, "MenuBorderBrush");
         var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 12, 0, 0) };
         buttons.Children.Add(add); buttons.Children.Add(remove); buttons.Children.Add(save); buttons.Children.Add(cancel);
+        var status = new TextBlock { MinHeight = 18, Margin = new Thickness(0, 5, 0, 0), Opacity = .78, TextWrapping = TextWrapping.Wrap };
         var body = new StackPanel();
         body.Children.Add(new TextBlock { Text = "Project and session folders", Margin = new Thickness(0, 0, 0, 8), Opacity = .78 });
-        body.Children.Add(list); body.Children.Add(buttons);
+        body.Children.Add(list); body.Children.Add(status); body.Children.Add(buttons);
         var dialog = CreateThemedDialog(title, body, 560, 300);
         add.Click += (_, _) =>
         {
-            var picker = new OpenFolderDialog { Title = "Add folder", Multiselect = false };
-            if (picker.ShowDialog(dialog) == true && !list.Items.Cast<string>().Contains(picker.FolderName, StringComparer.OrdinalIgnoreCase))
+            var currentFolder = list.SelectedItem as string ?? list.Items.Cast<string>().LastOrDefault();
+            var picker = new OpenFolderDialog
+            {
+                Title = "Add folder",
+                InitialDirectory = currentFolder is not null && Directory.Exists(currentFolder)
+                    ? currentFolder
+                    : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                Multiselect = false
+            };
+            if (picker.ShowDialog(dialog) != true)
+            {
+                dialog.Activate();
+                return;
+            }
+
+            var existing = list.Items.Cast<string>().FirstOrDefault(path =>
+                string.Equals(path, picker.FolderName, StringComparison.OrdinalIgnoreCase));
+            if (existing is not null)
+            {
+                list.SelectedItem = existing;
+                status.Text = "That folder is already in this list.";
+            }
+            else
+            {
                 list.Items.Add(picker.FolderName);
+                list.SelectedItem = picker.FolderName;
+                status.Text = $"Added: {picker.FolderName}";
+            }
+            dialog.Activate();
+            add.Focus();
         };
-        remove.Click += (_, _) => { if (list.SelectedItem is string selected) list.Items.Remove(selected); };
+        remove.Click += (_, _) =>
+        {
+            if (list.SelectedItem is string selected) list.Items.Remove(selected);
+            status.Text = "";
+        };
         save.Click += (_, _) => dialog.DialogResult = true;
         return dialog.ShowDialog() == true ? list.Items.Cast<string>().ToArray() : null;
     }
@@ -2442,7 +3047,9 @@ ApplySavedFontSettings();
         var content = new StackPanel();
         content.Children.Add(new TextBlock
         {
-            Text = windowTitle.Contains("session", StringComparison.OrdinalIgnoreCase) ? "Session name" : "Project / tab name",
+            Text = windowTitle.Contains("find", StringComparison.OrdinalIgnoreCase)
+                ? "Text to find"
+                : windowTitle.Contains("session", StringComparison.OrdinalIgnoreCase) ? "Session name" : "Project / tab name",
             Margin = new Thickness(0, 0, 0, 6)
         });
         content.Children.Add(input);
@@ -2593,8 +3200,13 @@ ApplySavedFontSettings();
 
         if (tab.Project is not null)
         {
-            try { PersistAllProjectRuntimes(tab); }
-            catch (Exception exception) { Debug.WriteLine("Could not checkpoint project session before closing tab: " + exception.Message); }
+            if (_tabs.Count > 1)
+                CheckpointProjectRuntimes();
+            else
+            {
+                try { PersistAllProjectRuntimes(tab); }
+                catch (Exception exception) { Debug.WriteLine("Could not checkpoint project session before closing tab: " + exception.Message); }
+            }
         }
 
         var wasActive = ReferenceEquals(tab, _activeTab);
@@ -2632,6 +3244,26 @@ ApplySavedFontSettings();
 
     private void RebuildTabStrip()
     {
+        var openMenu = TabStrip.Children.OfType<FrameworkElement>()
+            .Select(element => element.ContextMenu)
+            .FirstOrDefault(contextMenu => contextMenu is { IsOpen: true });
+        if (openMenu is not null)
+        {
+            if (!_tabStripRebuildPending)
+            {
+                _tabStripRebuildPending = true;
+                RoutedEventHandler? closed = null;
+                closed = (_, _) =>
+                {
+                    openMenu.Closed -= closed;
+                    _tabStripRebuildPending = false;
+                    if (!Dispatcher.HasShutdownStarted)
+                        _ = Dispatcher.BeginInvoke(RebuildTabStrip);
+                };
+                openMenu.Closed += closed;
+            }
+            return;
+        }
         MovePaneMenuItem.IsEnabled = _activeTab is { Panes.Count: > 1 } tabGroup && tabGroup.Panes.Contains(tabGroup.ActivePane);
         TabStrip.Children.Clear();
         foreach (var tab in _tabs)
@@ -2967,7 +3599,7 @@ ApplySavedFontSettings();
         try { ActiveView.CopySelection(); }
         catch (System.Runtime.InteropServices.ExternalException)
         {
-            MessageBox.Show(this, "The clipboard is busy. Please try copying again.", "Clipboard", MessageBoxButton.OK, MessageBoxImage.Information);
+            ThemedMessageBox.Show(this, "The clipboard is busy. Please try copying again.", "Clipboard", MessageBoxButton.OK, MessageBoxImage.Information);
         }
     }
 
@@ -2984,10 +3616,10 @@ ApplySavedFontSettings();
         try { await PasteClipboardCoreAsync(); }
         catch (System.Runtime.InteropServices.ExternalException)
         {
-            MessageBox.Show(this, "The clipboard is busy. Please try pasting again.", "Clipboard", MessageBoxButton.OK, MessageBoxImage.Information);
+            ThemedMessageBox.Show(this, "The clipboard is busy. Please try pasting again.", "Clipboard", MessageBoxButton.OK, MessageBoxImage.Information);
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException or System.ComponentModel.Win32Exception)
-        { MessageBox.Show(this, exception.Message, "Paste", MessageBoxButton.OK, MessageBoxImage.Error); }
+        { ThemedMessageBox.Show(this, exception.Message, "Paste", MessageBoxButton.OK, MessageBoxImage.Error); }
     }
 
     private async Task PasteClipboardCoreAsync()
@@ -3094,6 +3726,7 @@ ApplySavedFontSettings();
         var characters = new char[Encoding.UTF8.GetMaxCharCount(bytes.Length)];
         var decoder = Encoding.UTF8.GetDecoder();
         var cancellationToken = cancellationTokenSource.Token;
+        string? terminalEndMessage = null;
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -3105,15 +3738,23 @@ ApplySavedFontSettings();
             }
             catch (ObjectDisposedException)
             {
+                if (!cancellationToken.IsCancellationRequested)
+                    terminalEndMessage = "\r\n[Terminal transport was closed unexpectedly.]\r\n";
                 break;
             }
-            catch
+            catch (Exception exception)
             {
+                if (!cancellationToken.IsCancellationRequested)
+                    terminalEndMessage = "\r\n[Terminal output error: " + exception.Message + "]\r\n";
                 break;
             }
 
             if (byteCount <= 0)
+            {
+                if (!cancellationToken.IsCancellationRequested)
+                    terminalEndMessage = "\r\n[Shell exited. Start a new tab to open another terminal.]\r\n";
                 break;
+            }
 
             var characterCount = decoder.GetChars(
                 bytes,
@@ -3132,7 +3773,7 @@ ApplySavedFontSettings();
                 {
                     try
                     {
-                        await Task.Delay(1200, cancellationToken).ConfigureAwait(false);
+                        await Task.Delay(100, cancellationToken).ConfigureAwait(false);
                         if (!cancellationToken.IsCancellationRequested && ReferenceEquals(pane.Session, session))
                             session.Write(startupCommand + "\r");
                     }
@@ -3150,6 +3791,12 @@ ApplySavedFontSettings();
                 SuspendRendering(pane, snapshot.Revision);
             else
                 QueueRender(pane, snapshot);
+        }
+
+        if (terminalEndMessage is not null && !cancellationToken.IsCancellationRequested &&
+            ReferenceEquals(pane.Session, session) && !pane.IsDisposed)
+        {
+            QueueRender(pane, buffer.Process(terminalEndMessage));
         }
     }
 
@@ -3366,7 +4013,13 @@ ApplySavedFontSettings();
     }
 
     // A tab in the title bar: one or more panes shown side by side.
-    private sealed record ProjectSessionRuntime(List<TerminalPane> Panes, PaneLayout LayoutRoot, TerminalPane ActivePane);
+    private sealed record ProjectSessionRuntime(List<TerminalPane> Panes, PaneLayout LayoutRoot, TerminalPane ActivePane)
+    {
+        public bool IsStarted { get; set; }
+        public bool StartPending { get; set; }
+        public bool StartFreshBrokerOnStart { get; set; }
+        public string? RuntimeRoot { get; set; }
+    }
 
     private sealed class TerminalTab(TerminalPane pane)
     {
@@ -3400,10 +4053,13 @@ ApplySavedFontSettings();
         public TerminalView View { get; set; } = null!;
         public Border Frame { get; } = new();
         public bool IsShown { get; set; }
+        public string? StartupDirectory { get; set; }
         public string? WslDistribution { get; set; }
         public ITerminalTransport? Session { get; set; }
         public bool PersistentSessionReconnected { get; set; }
-        public string PersistentTranscriptPrefix { get; set; } = "";
+        public bool PersistentAttachPending { get; set; }
+        public bool RetryAgentStartupOnReattach { get; set; }
+        public bool IsDisposed => Volatile.Read(ref _disposeStarted) != 0;
         public TerminalBuffer? Buffer { get; set; }
         public CancellationTokenSource? CancellationTokenSource { get; set; }
         public TerminalSnapshot? PendingSnapshot { get; set; }

@@ -35,6 +35,11 @@ internal static partial class Program
             var png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(bitmap));
             using var stream=File.Create("bin/render-checks/theme-settings-"+name.Replace(' ','-')+".png");png.Save(stream);
         }
+        var windowsTerminal=ThemeOption.All.Single(option=>option.Name=="Windows Terminal");
+        list.SelectedItem=windowsTerminal;
+        if(windowsTerminal.Background!=ColorScheme.Find("Campbell")!.DefaultBackground ||
+           windowsTerminal.Foreground!=ColorScheme.Find("Campbell")!.DefaultForeground)
+            throw new Exception("Windows Terminal preset does not use Campbell's default colors");
         settings.Close();
         if(AppTheme.Current!=originalTheme || AppTheme.Scheme!=originalScheme)throw new Exception("Canceling theme settings applied the preview");
         if(ThemeOption.QuickMode(false,null).Scheme?.Name!="Gruvbox Light" || ThemeOption.QuickMode(true,null).Theme!=AppThemeKind.Dark ||
@@ -44,6 +49,13 @@ internal static partial class Program
         if(main.FindName("DarkSchemesMenuItem") is not null || main.FindName("LightSchemesMenuItem") is not null || main.FindName("DarkThemeMenuItem") is not null)
             throw new Exception("Old duplicate theme submenus remain");
         main.Close();
+        AppTheme.Apply(AppThemeKind.Dark,ColorScheme.Find("Windows Terminal"));
+        var resources=Application.Current.Resources;
+        if(((SolidColorBrush)resources["TitleBarBrush"]).Color!=Color.FromRgb(32,32,32) ||
+           ((SolidColorBrush)resources["ToolbarBrush"]).Color!=Color.FromRgb(45,45,45) ||
+           AppTheme.TabAccent!=Color.FromRgb(0,120,212) || AppTheme.DefaultBackground!=new TerminalColor(12,12,12))
+            throw new Exception("Windows Terminal preset did not apply its terminal and chrome palette");
+        AppTheme.Apply(originalTheme,originalScheme);
         Console.WriteLine("PASS unified theme settings, isolated selection preview/cancel, dark/Gruvbox Light quick switch and removed duplicate menus");
     }
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
@@ -56,6 +57,25 @@ public sealed record TerminalSnapshot(
     long Revision)
 {
     public int Columns { get; init; }
+    public bool HasWrappedLines { get; init; }
+}
+
+internal sealed class TerminalLineCollection(TerminalLine[] scrollback, TerminalLine[] screen)
+    : IReadOnlyList<TerminalLine>
+{
+    public int Count => scrollback.Length + screen.Length;
+
+    public TerminalLine this[int index] => index < 0 || index >= Count
+        ? throw new ArgumentOutOfRangeException(nameof(index))
+        : index < scrollback.Length ? scrollback[index] : screen[index - scrollback.Length];
+
+    public IEnumerator<TerminalLine> GetEnumerator()
+    {
+        foreach (var line in scrollback) yield return line;
+        foreach (var line in screen) yield return line;
+    }
+
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 }
 
 public sealed class TerminalBuffer
@@ -90,6 +110,8 @@ public sealed class TerminalBuffer
     private readonly StringBuilder _osc = new();
     private readonly StringBuilder _dcs = new();
     private readonly List<TerminalLine> _scrollback = [];
+    private TerminalLine[]? _snapshotScrollback;
+    private int _scrollbackWrappedLineCount;
     private readonly List<string> _pendingResponses = [];
     private int _maximumScrollbackRows;
     private long _scrollbackStartIndex;
@@ -1262,6 +1284,8 @@ public sealed class TerminalBuffer
             {
                 _scrollbackStartIndex += _scrollback.Count;
                 _scrollback.Clear();
+                _snapshotScrollback = null;
+                _scrollbackWrappedLineCount = 0;
             }
 
             return;
@@ -1444,12 +1468,8 @@ public sealed class TerminalBuffer
             }
         }
 
-        var lines = new List<TerminalLine>(
-            (_alternateScreenActive ? 0 : _scrollback.Count) +
-            lastVisibleRow + 1);
-
-        if (!_alternateScreenActive)
-            lines.AddRange(_scrollback);
+        var screenLines = new TerminalLine[lastVisibleRow + 1];
+        var hasWrappedLines = !_alternateScreenActive && _scrollbackWrappedLineCount > 0;
 
         for (var row = 0; row <= lastVisibleRow; row++)
         {
@@ -1472,10 +1492,15 @@ public sealed class TerminalBuffer
                 for (var column = 0; column < cellLength; column++)
                     _snapshotCells[row, column] = _cells[row, column];
             }
-            lines.Add(cached!);
+            screenLines[row] = cached!;
+            hasWrappedLines |= _wrappedFromPrevious[row];
         }
 
         var scrollbackCount = _alternateScreenActive ? 0 : _scrollback.Count;
+        if (!_alternateScreenActive)
+            _snapshotScrollback ??= _scrollback.ToArray();
+        var lines = new TerminalLineCollection(
+            _alternateScreenActive ? [] : _snapshotScrollback ?? [], screenLines);
         var responses = _pendingResponses.ToArray();
         _pendingResponses.Clear();
 
@@ -1495,7 +1520,7 @@ public sealed class TerminalBuffer
                 _sgrMouse,
                 _synchronizedOutput),
             responses,
-            ++_revision) { Columns = _columns };
+            ++_revision) { Columns = _columns, HasWrappedLines = hasWrappedLines };
     }
 
     private TerminalLine CreateLine(Cell[] cells, int cellLength, bool preserveTrailingSpaces)
@@ -1615,7 +1640,11 @@ public sealed class TerminalBuffer
         for (var column = 0; column < _columns; column++)
             copy[column] = _cells[row, column];
 
-        _scrollback.Add(CreateLine(copy, copy.Length, row + 1 < _rows && _wrappedFromPrevious[row + 1]) with { WrappedFromPrevious = _wrappedFromPrevious[row] });
+        var line = CreateLine(copy, copy.Length, row + 1 < _rows && _wrappedFromPrevious[row + 1]) with { WrappedFromPrevious = _wrappedFromPrevious[row] };
+        _scrollback.Add(line);
+        _snapshotScrollback = null;
+        if (line.WrappedFromPrevious)
+            _scrollbackWrappedLineCount++;
 
         if (_scrollback.Count > _maximumScrollbackRows + 128)
             TrimScrollback();
@@ -1628,7 +1657,13 @@ public sealed class TerminalBuffer
 
         var removeCount =
             _scrollback.Count - _maximumScrollbackRows;
+        for (var index = 0; index < removeCount; index++)
+        {
+            if (_scrollback[index].WrappedFromPrevious)
+                _scrollbackWrappedLineCount--;
+        }
         _scrollback.RemoveRange(0, removeCount);
+        _snapshotScrollback = null;
         _scrollbackStartIndex += removeCount;
     }
 

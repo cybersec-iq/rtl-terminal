@@ -19,6 +19,17 @@ internal static partial class Program
     }
     private static void Run()
     {
+        if (Environment.GetCommandLineArgs().Contains("--agent-command-launcher-only"))
+        {
+            AgentCommandLauncherTests.Run();
+            return;
+        }
+        if (Environment.GetCommandLineArgs().Contains("--project-menu-only"))
+        {
+            CheckProjectSessionStore();
+            CheckProjectMenus();
+            return;
+        }
         CheckProjectSessionStore();
         CheckProjectMenus();
         CheckAgentCompletionMonitor();

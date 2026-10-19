@@ -81,13 +81,13 @@ Rtl Terminal uses the Windows ConPTY API and works with command-line environment
 - Show recommended terminal and programming fonts when installed.
 - Optionally add **Open in AryanIQ Rtl Terminal** to the Windows folder context menu.
 - Open a terminal directly in the selected folder.
-- Use **Select** beside the new-tab button to choose a working folder, name the project tab and open a new tab there. If the active terminal is running Codex CLI or Claude Code, the same agent starts in the new folder.
+- Open saved projects from the terminal profile menu beside **+**; clicking a session opens it directly in the project tab. Right-click the project tab to switch sessions or manage the active session.
 - Rename a tab from its right-click menu; the custom label stays with that open tab.
 - Remember whether new tabs should use Command Prompt, PowerShell or WSL.
 - Reopen one of the ten most recent Command Prompt directories from the File menu.
 - Export the retained content of the current terminal session to a UTF-8 text file.
 - Provide a built-in guide in English, Persian and Arabic.
-- Check GitHub Releases for updates manually or at startup, with a per-version dismissal option.
+- Check GitHub Releases only when you choose **Check for updates** from the app menu; no update popup is shown at startup.
 - Use a consistent dark interface for menus, tabs and window controls.
 - Support self-contained Windows releases with a bundled Unicode-aware ConPTY host.
 
@@ -211,7 +211,7 @@ The installer includes the self-contained .NET runtime. The workflow can also be
 | Shell-specific undo, redo and cut/edit actions | `Ctrl+Z`, `Ctrl+Y` and `Ctrl+X` |
 | Bypass application mouse capture | Hold `Shift` while selecting or right-clicking |
 | Create a tab using the default profile | `Ctrl+Shift+T` |
-| Select a folder for a new tab | `Select` beside `+` |
+| Open or manage a saved project session | Terminal profile menu beside `+`; right-click the project tab to manage its active session |
 | Switch to the next or previous tab | `Ctrl+Tab` or `Ctrl+Shift+Tab` |
 | Close the active pane or its last tab | `Ctrl+Shift+W` |
 | Interrupt the active command | `Ctrl+C` when no text is selected |
@@ -343,6 +343,7 @@ The project preserves the original MIT License. Contributions and redistribution
 - نمایش فونت‌های استاندارد ترمینال و برنامه‌نویسی در صورت نصب‌بودن
 - افزودن اختیاری گزینه **Open in AryanIQ Rtl Terminal** به منوی راست‌کلیک پوشه‌ها
 - بازکردن ترمینال مستقیماً در مسیر پوشه انتخاب‌شده
+- بازکردن پروژه‌های ذخیره‌شده از منوی پروفایل کنار `+`؛ کلیک روی نام هر سشن آن را مستقیم باز می‌کند و راست‌کلیک تب امکان سوییچ و مدیریت سشن فعال را می‌دهد
 - به‌خاطرسپردن CMD، پاورشل یا WSL به‌عنوان محیط پیش‌فرض تب جدید
 - دسترسی به ده مسیر اخیر CMD از منوی File
 - خروجی‌گرفتن از محتوای جلسهٔ جاری در فایل متنی UTF-8

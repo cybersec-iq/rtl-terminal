@@ -7,8 +7,12 @@ internal static partial class Program
 {
     private static void CheckThemes()
     {
+        AssertScheme("Tokyo Night", "1A1B26", "C0CAF5", "F7768E");
+        AssertScheme("Catppuccin Frappe", "303446", "C6D0F5", "E78284");
+        AssertScheme("Rosé Pine", "191724", "E0DEF4", "EB6F92");
         if (Application.Current is null)
             _ = new Application { ShutdownMode = ShutdownMode.OnExplicitShutdown };
+        AssertSchemeChrome();
         AppTheme.Apply(AppThemeKind.Dark);
         var view = new TerminalView
         {
@@ -84,5 +88,64 @@ internal static partial class Program
             Console.WriteLine("PASS live theme switching, ANSI/indexed remapping, color schemes, exact RGB preservation and OSC defaults");
         }
         finally { AppTheme.Apply(AppThemeKind.Dark); }
+    }
+
+    private static void AssertScheme(string name, string background, string foreground, string red)
+    {
+        var scheme = ColorScheme.Find(name) ?? throw new Exception($"Missing color scheme '{name}'");
+        if (scheme.Ansi.Length != 16 || scheme.Background != background || scheme.Foreground != foreground || scheme.Ansi[1] != red)
+            throw new Exception($"Color scheme '{name}' has an incomplete or incorrect ANSI palette");
+    }
+
+    private static void AssertSchemeChrome()
+    {
+        var resources = Application.Current.Resources;
+        Color Brush(string key) => ((SolidColorBrush)resources[key]).Color;
+        void AssertReadable(Color text, Color background, string label)
+        {
+            static double Channel(byte value)
+            {
+                var c = value / 255d;
+                return c <= .04045 ? c / 12.92 : Math.Pow((c + .055) / 1.055, 2.4);
+            }
+            static double Luminance(Color color) => .2126 * Channel(color.R) + .7152 * Channel(color.G) + .0722 * Channel(color.B);
+            var a = Luminance(text);
+            var b = Luminance(background);
+            var ratio = (Math.Max(a, b) + .05) / (Math.Min(a, b) + .05);
+            if (ratio < 4.5) throw new Exception($"{label} contrast is too low: {ratio:F2}:1");
+        }
+        void CheckGenericScheme(string name)
+        {
+            AppTheme.Apply(AppThemeKind.Dark, ColorScheme.Find(name));
+            var toolbar = Brush("ToolbarBrush");
+            var title = Brush("TitleBarBrush");
+            var menu = Brush("MenuBackgroundBrush");
+            var terminalBackground = AppTheme.DefaultBackground;
+            var terminalSurface = Color.FromRgb(terminalBackground.Red, terminalBackground.Green, terminalBackground.Blue);
+            if (toolbar == terminalSurface || title == toolbar || menu == terminalSurface)
+                throw new Exception($"{name} did not derive distinct chrome surfaces from its terminal background");
+            AssertReadable(Brush("ChromeForegroundBrush"), toolbar, $"{name} chrome text");
+            AssertReadable(Brush("ChromeForegroundBrush"), menu, $"{name} menu text");
+            AssertReadable(Brush("ChromeStrongForegroundBrush"), Brush("MenuHighlightBrush"), $"{name} highlighted menu text");
+            AssertReadable(Brush("ChromeStrongForegroundBrush"), Brush("MenuOpenBrush"), $"{name} open menu text");
+            AssertReadable(AppTheme.TabAccent, toolbar, $"{name} accent");
+            AssertReadable(Brush("FocusBrush"), toolbar, $"{name} keyboard focus");
+            AssertReadable(AppTheme.ActiveTabText, AppTheme.ActiveTab, $"{name} active tab text");
+            AssertReadable(AppTheme.InactiveTabText, title, $"{name} inactive tab text");
+        }
+
+        CheckGenericScheme("Dracula");
+        CheckGenericScheme("Catppuccin Latte");
+
+        AppTheme.Apply(AppThemeKind.Dark, ColorScheme.Find("Campbell"));
+        if (Brush("TitleBarBrush") != Color.FromRgb(32, 33, 36) || AppTheme.TabAccent != Color.FromRgb(114, 214, 197))
+            throw new Exception("Campbell's existing application chrome changed");
+        AppTheme.Apply(AppThemeKind.Dark, ColorScheme.Find("Windows Terminal"));
+        if (Brush("TitleBarBrush") != Color.FromRgb(32, 32, 32) || AppTheme.TabAccent != Color.FromRgb(0, 120, 212))
+            throw new Exception("Windows Terminal's established chrome changed");
+        AppTheme.Apply(AppThemeKind.Dark, ColorScheme.Find("AryanIQ Phosphor"));
+        if (AppTheme.TabAccent != Color.FromRgb(57, 255, 20) || Brush("TerminalBackgroundBrush") != Colors.Black)
+            throw new Exception("Phosphor's established accent or terminal surface changed");
+        AppTheme.Apply(AppThemeKind.Dark);
     }
 }

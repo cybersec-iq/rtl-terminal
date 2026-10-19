@@ -15,6 +15,10 @@ internal static partial class Program
         var lineHeight = (double)typeof(TerminalView).GetField("_lineHeight", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(view)!;
         view.ScrollToVerticalOffset(90 * lineHeight);
         Render(view, snapshot, "preview-middle.png");
+        if (!view.FindNext("ROW050") || view.GetSelectedText() != "ROW050")
+            throw new Exception("Find did not select a match from terminal scrollback");
+        if (!view.FindNext("ROW050") || view.GetSelectedText() != "ROW050")
+            throw new Exception("Find did not wrap when it reached the end of terminal history");
         var first = (int)Math.Floor(view.VerticalOffset / lineHeight);
         var last = Math.Min(snapshot.Lines.Count, (int)Math.Ceiling((view.VerticalOffset + view.ViewportHeight) / lineHeight));
         var recent = Math.Max(0, (int)Math.Floor((view.VerticalOffset - 2 * view.ViewportHeight) / lineHeight));
