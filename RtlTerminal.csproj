@@ -22,7 +22,7 @@
 
     <Description>AryanIQ terminal with approved dark-blue Windows Terminal theme and Persian/RTL support.</Description>
 
-    <Version>1.1.11</Version>
+    <Version>1.1.15</Version>
 
     <Nullable>enable</Nullable>
 
@@ -47,6 +47,18 @@
     <Resource Include="RtlTerminal.ico" />
     <Compile Remove="tests\**\*.cs" />
   </ItemGroup>
+
+  <Target Name="ValidateConPtyPublishPayload" AfterTargets="Publish">
+    <Error Condition="!Exists('$(PublishDir)ConPty/x64/conpty.dll')" Text="Published ConPty payload is incomplete: ConPty/x64/conpty.dll is missing." />
+    <Error Condition="!Exists('$(PublishDir)ConPty/x64/OpenConsole.exe')" Text="Published ConPty payload is incomplete: ConPty/x64/OpenConsole.exe is missing." />
+    <Error Condition="!Exists('$(PublishDir)ConPty/x86/conpty.dll')" Text="Published ConPty payload is incomplete: ConPty/x86/conpty.dll is missing." />
+    <Error Condition="!Exists('$(PublishDir)ConPty/x86/OpenConsole.exe')" Text="Published ConPty payload is incomplete: ConPty/x86/OpenConsole.exe is missing." />
+    <Error Condition="!Exists('$(PublishDir)ConPty/arm64/conpty.dll')" Text="Published ConPty payload is incomplete: ConPty/arm64/conpty.dll is missing." />
+    <Error Condition="!Exists('$(PublishDir)ConPty/arm64/OpenConsole.exe')" Text="Published ConPty payload is incomplete: ConPty/arm64/OpenConsole.exe is missing." />
+    <Error Condition="!Exists('$(PublishDir)AgentEngine/Shims/xagent.cmd')" Text="Published X Agents payload is incomplete: AgentEngine/Shims/xagent.cmd is missing." />
+    <Error Condition="!Exists('$(PublishDir)AgentEngine/Shims/xagent.ps1')" Text="Published X Agents payload is incomplete: AgentEngine/Shims/xagent.ps1 is missing." />
+    <Error Condition="!Exists('$(PublishDir)AgentEngine/Shims/xagent')" Text="Published X Agents payload is incomplete: AgentEngine/Shims/xagent is missing." />
+  </Target>
 
 
 

@@ -129,18 +129,11 @@ public sealed class AgentCompletionMonitor : IDisposable
             var root = document.RootElement;
             if (root.ValueKind != JsonValueKind.Object ||
                 !root.TryGetProperty("lastExit", out var lastExit) || lastExit.ValueKind != JsonValueKind.Object ||
-                !lastExit.TryGetProperty(agentKey, out var entry) || entry.ValueKind != JsonValueKind.Object ||
-                !entry.TryGetProperty("code", out var codeElement) || !codeElement.TryGetInt32(out var exitCode) ||
-                !entry.TryGetProperty("at", out var atElement) || atElement.ValueKind != JsonValueKind.String)
-                return null;
-
-            var atText = atElement.GetString();
-            if (string.IsNullOrWhiteSpace(atText) ||
-                !DateTimeOffset.TryParse(atText, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var completedAt))
+                !lastExit.TryGetProperty(agentKey, out var entry) || !TryParseLastExit(entry, out var record))
                 return null;
 
             // A null code is used by X Agents CLI for an abruptly closed tab, not a completed process.
-            return new LastExit(exitCode, completedAt.ToUniversalTime());
+            return record;
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or ArgumentException)
         {
@@ -156,16 +149,14 @@ public sealed class AgentCompletionMonitor : IDisposable
         {
             using var stream = new FileStream(statePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
             using var document = JsonDocument.Parse(stream);
-            if (!document.RootElement.TryGetProperty("lastExit", out var lastExit) || lastExit.ValueKind != JsonValueKind.Object)
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("lastExit", out var lastExit) || lastExit.ValueKind != JsonValueKind.Object)
                 return result;
             foreach (var property in lastExit.EnumerateObject())
             {
-                if (property.Value.ValueKind != JsonValueKind.Object ||
-                    !property.Value.TryGetProperty("code", out var code) || !code.TryGetInt32(out var exitCode) ||
-                    !property.Value.TryGetProperty("at", out var at) || at.ValueKind != JsonValueKind.String ||
-                    !DateTimeOffset.TryParse(at.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var completedAt))
-                    continue;
-                result[property.Name] = new LastExit(exitCode, completedAt.ToUniversalTime());
+                if (TryParseLastExit(property.Value, out var lastExitRecord))
+                    result[property.Name] = lastExitRecord;
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException or ArgumentException)
@@ -173,6 +164,20 @@ public sealed class AgentCompletionMonitor : IDisposable
             // Missing, transiently partial, or malformed state is retried on the next tick.
         }
         return result;
+    }
+
+    private static bool TryParseLastExit(JsonElement entry, out LastExit lastExit)
+    {
+        lastExit = default!;
+        if (entry.ValueKind != JsonValueKind.Object ||
+            !entry.TryGetProperty("code", out var code) || code.ValueKind != JsonValueKind.Number ||
+            !code.TryGetInt32(out var exitCode) ||
+            !entry.TryGetProperty("at", out var at) || at.ValueKind != JsonValueKind.String ||
+            !DateTimeOffset.TryParse(at.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var completedAt))
+            return false;
+
+        lastExit = new LastExit(exitCode, completedAt.ToUniversalTime());
+        return true;
     }
 
     private sealed class WatchedSession(string sessionId, string agentKey, string statePath)

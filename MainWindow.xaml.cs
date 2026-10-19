@@ -63,6 +63,8 @@ public partial class MainWindow : Window
     private IntPtr _windowHandle;
     private HwndSource? _windowSource;
     private bool _returnToXAgentHotkeyRegistered;
+    private bool _projectCloseCheckpointInProgress;
+    private bool _allowCloseAfterProjectCheckpoint;
 
     public MainWindow()
     {
@@ -155,28 +157,26 @@ ApplySavedFontSettings();
             DispatcherPriority.Loaded,
             () =>
             {
-                if (!RestoreSavedProjectTabs()) CreateTerminalTab(_defaultProfile);
+                var restoredSession = false;
+                try
+                {
+                    if (_projectStore.GetMostRecentlyActiveSession() is { } active)
+                    {
+                        OpenProjectSession(active.Project, active.Session, acknowledgeCompletions: false);
+                        restoredSession = true;
+                    }
+                }
+                catch (Exception exception)
+                {
+                    Debug.WriteLine("Could not restore the last active project session: " + exception.Message);
+                }
+
+                // Keep the ordinary fresh-terminal startup for first run or when no saved project session exists.
+                if (!restoredSession)
+                    CreateTerminalTab(_defaultProfile);
                 // A first-run modal prompt must never prevent the terminal shell from starting.
                 Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(PromptForContextMenuIntegration));
             });
-    }
-
-    private bool RestoreSavedProjectTabs()
-    {
-        var restored = false;
-        try
-        {
-            foreach (var project in _projectStore.GetProjects())
-            {
-                if (string.IsNullOrWhiteSpace(project.ActiveSessionId)) continue;
-                var session = _projectStore.GetSessions(project.Id).FirstOrDefault(item => item.Id == project.ActiveSessionId);
-                if (session is null) continue;
-                OpenProjectSession(project, session, acknowledgeCompletions: false);
-                restored = true;
-            }
-        }
-        catch (Exception exception) { ShowProjectStoreError(exception); }
-        return restored;
     }
 
     private TerminalPane CreateTerminalTab(
@@ -247,6 +247,9 @@ ApplySavedFontSettings();
     private void StartPane(TerminalPane pane, string? requestedStartupDirectory, bool showIntroduction = true,
         string? persistentSessionId = null, string? restoredTranscript = null, bool startFreshBroker = false)
     {
+        try { AgentEngineDeployment.EnsureGlobalRuntime(); }
+        catch (Exception exception) { Debug.WriteLine("Could not prepare the global X Agents CLI runtime: " + exception.Message); }
+        pane.EnvironmentOverrides ??= AgentEngineDeployment.CreateShellEnvironment();
         var startupDirectory = ResolveStartupDirectory(
             requestedStartupDirectory);
         pane.StartupDirectory = startupDirectory;
@@ -278,7 +281,7 @@ ApplySavedFontSettings();
             else
             {
                 var session = new ConPtySession(columns, rows);
-                session.Start(shellCommand, startupDirectory);
+                session.Start(shellCommand, startupDirectory, pane.EnvironmentOverrides);
                 pane.Session = session;
             }
 
@@ -294,7 +297,22 @@ ApplySavedFontSettings();
         {
             var errorBuffer = new TerminalBuffer(GetColumns(pane.View), GetRows(pane.View));
             Render(pane, errorBuffer.Process("خطا در اجرای ConPTY:\r\n" + exception.Message));
+            if (persistentSessionId is not null)
+                ResetProjectRuntimeAfterAttachFailure(pane, persistentSessionId);
         }
+    }
+
+    private void ResetProjectRuntimeAfterAttachFailure(TerminalPane pane, string sessionId)
+    {
+        var tab = _tabs.FirstOrDefault(candidate => candidate.ActiveProjectSession?.Id == sessionId &&
+            candidate.ProjectRuntimes.Values.Any(runtime => ReferenceEquals(runtime.ActivePane, pane)));
+        if (tab?.ActiveProjectSession is not { } active ||
+            !tab.ProjectRuntimes.TryGetValue(RuntimeKey(active), out var runtime) ||
+            !ReferenceEquals(runtime.ActivePane, pane))
+            return;
+
+        runtime.StartPending = false;
+        runtime.IsStarted = false;
     }
 
     private async Task AttachPersistentPaneAsync(TerminalPane pane, string sessionId, string shellCommand,
@@ -307,8 +325,10 @@ ApplySavedFontSettings();
             // Named-pipe attach can wait several seconds and broker startup can take longer.
             // Keep both operations off the WPF dispatcher so session selection stays responsive.
             persistent = await Task.Run(() => startFreshBroker
-                ? PersistentConPtySession.Start(sessionId, shellCommand, startupDirectory, columns, rows)
-                : PersistentConPtySession.AttachOrStart(sessionId, shellCommand, startupDirectory, columns, rows)).ConfigureAwait(false);
+                ? PersistentConPtySession.Start(sessionId, shellCommand, startupDirectory, columns, rows,
+                    environmentOverrides: pane.EnvironmentOverrides)
+                : PersistentConPtySession.AttachOrStart(sessionId, shellCommand, startupDirectory, columns, rows,
+                    pane.EnvironmentOverrides)).ConfigureAwait(false);
             await Dispatcher.InvokeAsync(() =>
             {
                 if (cancellationTokenSource is null || cancellationTokenSource.IsCancellationRequested ||
@@ -348,6 +368,7 @@ ApplySavedFontSettings();
                 pane.PersistentAttachPending = false;
                 pane.CancellationTokenSource = null;
                 cancellationTokenSource.Dispose();
+                ResetProjectRuntimeAfterAttachFailure(pane, sessionId);
                 var message = exception is PersistentSessionBusyException
                     ? "این سشن در پنجرهٔ دیگری باز است. بستن پنجرهٔ قبلی فقط رابط را جدا می‌کند؛ سشن Codex/X Agents CLI زنده می‌ماند. بعد روی نام سشن دوباره کلیک کن."
                     : exception.Message;
@@ -405,17 +426,104 @@ ApplySavedFontSettings();
         view.PreviewTextInput += TerminalTextBox_PreviewTextInput;
     }
 
+    private async void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
+    {
+        if (_allowCloseAfterProjectCheckpoint || !_tabs.Any(tab => tab.Project is not null)) return;
+        e.Cancel = true;
+        if (_projectCloseCheckpointInProgress) return;
+
+        _projectCloseCheckpointInProgress = true;
+        _projectCheckpointTimer.Stop();
+        IsEnabled = false;
+        var savedRevisions = new List<(string SessionId, long Revision)>();
+        try
+        {
+            var pending = _pendingTranscriptTasks.Values.ToArray();
+            try { await Task.WhenAll(pending).ConfigureAwait(false); }
+            catch (Exception exception) { Debug.WriteLine("Pending transcript save failed before close: " + exception.Message); }
+
+            var checkpoints = Dispatcher.Invoke(() =>
+            {
+                _pendingTranscriptTasks.Clear();
+                _pendingTranscriptRevisions.Clear();
+
+                var capturedCheckpoints = new List<(SavedProjectSession Session, string Transcript, string? RuntimeRoot, long Revision)>();
+                var captured = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var tab in _tabs.Where(tab => tab.Project is not null))
+                {
+                    var project = tab.Project!;
+                    foreach (var session in _projectStore.GetSessions(project.Id))
+                    {
+                        if (captured.Contains(session.Id) || !tab.ProjectRuntimes.TryGetValue(RuntimeKey(session), out var runtime) ||
+                            runtime.ActivePane.Buffer is not { } buffer)
+                            continue;
+                        captured.Add(session.Id);
+
+                        var snapshot = buffer.CaptureSnapshot();
+                        if (_savedTranscriptRevisions.TryGetValue(session.Id, out var savedRevision) && savedRevision == snapshot.Revision)
+                            continue;
+                        capturedCheckpoints.Add((session, CreateSessionText(snapshot), runtime.RuntimeRoot, snapshot.Revision));
+                    }
+
+                    if (tab.ActiveProjectSession is { } active && !captured.Contains(active.Id) &&
+                        tab.ProjectRuntimes.TryGetValue(RuntimeKey(active), out var activeRuntime) && activeRuntime.ActivePane.Buffer is { } activeBuffer)
+                    {
+                        captured.Add(active.Id);
+                        var snapshot = activeBuffer.CaptureSnapshot();
+                        if (!_savedTranscriptRevisions.TryGetValue(active.Id, out var savedRevision) || savedRevision != snapshot.Revision)
+                            capturedCheckpoints.Add((active, CreateSessionText(snapshot), activeRuntime.RuntimeRoot, snapshot.Revision));
+                    }
+                }
+                return capturedCheckpoints;
+            });
+
+            savedRevisions = await Task.Run(() =>
+            {
+                var saved = new List<(string SessionId, long Revision)>();
+                foreach (var checkpoint in checkpoints)
+                {
+                    try
+                    {
+                        _projectStore.UpdateTranscript(checkpoint.Session.Id, checkpoint.Transcript);
+                        try
+                        {
+                            var runtimeRoot = checkpoint.RuntimeRoot ?? AgentEngineDeployment.EnsureDeployed(checkpoint.Session.Id);
+                            WriteSessionHandoff(checkpoint.Session with { Transcript = checkpoint.Transcript },
+                                GetSessionHandoffPath(runtimeRoot, checkpoint.Session.Id));
+                        }
+                        catch (Exception exception)
+                        { Debug.WriteLine("Could not update X Agents transcript handoff during close: " + exception.Message); }
+                        saved.Add((checkpoint.Session.Id, checkpoint.Revision));
+                    }
+                    catch (Exception exception)
+                    { Debug.WriteLine("Could not save project transcript during close: " + exception.Message); }
+                }
+                return saved;
+            }).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
+            Debug.WriteLine("Could not checkpoint project sessions before close: " + exception.Message);
+        }
+        finally
+        {
+            Dispatcher.Invoke(() =>
+            {
+                foreach (var saved in savedRevisions)
+                    _savedTranscriptRevisions[saved.SessionId] = saved.Revision;
+                _allowCloseAfterProjectCheckpoint = true;
+                IsEnabled = true;
+                Close();
+            });
+        }
+    }
+
     private void Window_Closed(object? sender, EventArgs e)
     {
         _projectCheckpointTimer.Stop();
         _agentCompletionMonitor.Dispose();
         if (_returnToXAgentHotkeyRegistered) UnregisterHotKey(_windowHandle, ReturnToXAgentHotkeyId);
         _windowSource?.RemoveHook(WindowMessageHook);
-        foreach (var tab in _tabs.Where(tab => tab.Project is not null))
-        {
-            try { PersistAllProjectRuntimes(tab); }
-            catch (Exception exception) { Debug.WriteLine("Could not persist project session transcript: " + exception.Message); }
-        }
         foreach (var pane in _tabs.SelectMany(tab => tab.AllPanes()).Distinct())
         {
             pane.IsShown = false;
@@ -718,7 +826,7 @@ ApplySavedFontSettings();
         return agent;
     }
 
-    private MenuItem CreateProjectMenuItem(SavedProject project, TerminalProfile profile)
+    private MenuItem CreateProjectMenuItem(SavedProject project, TerminalProfile profile, TerminalTab? targetTab = null)
     {
         var projectItem = new MenuItem { Header = project.Name };
         projectItem.ContextMenu = CreateProjectContextMenu(project, profile);
@@ -726,9 +834,9 @@ ApplySavedFontSettings();
         if (sessions.Count == 0)
             projectItem.Items.Add(new MenuItem { Header = "No sessions yet", IsEnabled = false });
         foreach (var session in sessions)
-            projectItem.Items.Add(CreateProjectSessionMenuItem(project, session, profile));
+            projectItem.Items.Add(CreateProjectSessionMenuItem(project, session, profile, targetTab: targetTab));
         projectItem.Items.Add(new Separator());
-        projectItem.Items.Add(CreateAddSessionMenuItem(project, profile));
+        projectItem.Items.Add(CreateAddSessionMenuItem(project, profile, targetTab));
         projectItem.Items.Add(CreateProjectManagementMenuItem(project, profile));
         return projectItem;
     }
@@ -793,7 +901,8 @@ ApplySavedFontSettings();
         SavedProject project,
         SavedProjectSession session,
         TerminalProfile profile,
-        bool showCompletion = true)
+        bool showCompletion = true,
+        TerminalTab? targetTab = null)
     {
         var savedProfile = Enum.TryParse<TerminalProfile>(session.Profile, out var parsedProfile)
             ? parsedProfile
@@ -812,11 +921,11 @@ ApplySavedFontSettings();
             Header = header,
             ContextMenu = CreateSessionContextMenu(project, session, profile)
         };
-        sessionItem.Click += (_, _) => OpenProjectSession(project, session);
+        sessionItem.Click += (_, _) => OpenProjectSession(project, session, targetTab: targetTab);
         return sessionItem;
     }
 
-    private MenuItem CreateAddSessionMenuItem(SavedProject project, TerminalProfile profile)
+    private MenuItem CreateAddSessionMenuItem(SavedProject project, TerminalProfile profile, TerminalTab? targetTab = null)
     {
         var profileLabel = profile switch
         {
@@ -825,7 +934,7 @@ ApplySavedFontSettings();
             _ => "CMD"
         };
         var add = new MenuItem { Header = $"+ New {profileLabel} session..." };
-        add.Click += (_, _) => CreateNamedProjectSession(project, profile, "xagent");
+        add.Click += (_, _) => CreateNamedProjectSession(project, profile, "xagent", targetTab);
         return add;
     }
 
@@ -914,7 +1023,7 @@ ApplySavedFontSettings();
         catch (Exception exception) { ShowProjectStoreError(exception); }
     }
 
-    private void CreateNamedProjectSession(SavedProject project, TerminalProfile profile, string agent)
+    private void CreateNamedProjectSession(SavedProject project, TerminalProfile profile, string agent, TerminalTab? targetTab = null)
     {
         var name = PromptForTabName("New session", "Session " + (_projectStore.GetSessions(project.Id).Count + 1));
         if (name is null) return;
@@ -922,13 +1031,13 @@ ApplySavedFontSettings();
         {
             var session = _projectStore.CreateSession(project.Id, name, profile.ToString(), agent,
                 project.Paths);
-            OpenProjectSession(project, session, newlyCreated: true);
+            OpenProjectSession(project, session, newlyCreated: true, targetTab: targetTab);
         }
         catch (Exception exception) { ShowProjectStoreError(exception); }
     }
 
     private void OpenProjectSession(SavedProject project, SavedProjectSession session, bool acknowledgeCompletions = true,
-        bool newlyCreated = false)
+        bool newlyCreated = false, TerminalTab? targetTab = null)
     {
         session = _projectStore.GetSessions(project.Id).FirstOrDefault(item => item.Id == session.Id) ?? session;
         if (acknowledgeCompletions)
@@ -939,7 +1048,14 @@ ApplySavedFontSettings();
         }
         else if (session.CompletionCount > 0)
             _sessionCompletionCounts[session.Id] = session.CompletionCount;
-        var tab = _tabs.FirstOrDefault(item => item.Project?.Id == project.Id);
+        var runtimeKey = RuntimeKey(session);
+        var existingTab = _tabs.FirstOrDefault(item => item.ActiveProjectSession?.Id == session.Id) ??
+            _tabs.FirstOrDefault(item => item.ProjectRuntimes.ContainsKey(runtimeKey));
+        if (targetTab is not null && !_tabs.Contains(targetTab)) targetTab = null;
+        if (existingTab is not null && !ReferenceEquals(existingTab, targetTab))
+            targetTab = existingTab;
+
+        var tab = targetTab;
         if (tab is null)
         {
             var profile = Enum.TryParse<TerminalProfile>(session.Profile, out var savedProfile)
@@ -948,8 +1064,22 @@ ApplySavedFontSettings();
             tab = new TerminalTab(pane) { Project = project };
             _tabs.Add(tab);
         }
+        else if (tab.Project is null)
+        {
+            foreach (var oldPane in tab.Panes)
+            {
+                oldPane.IsShown = false;
+                _ = oldPane.DisposeAsync();
+            }
+            var profile = Enum.TryParse<TerminalProfile>(session.Profile, out var savedProfile)
+                ? savedProfile : tab.Profile;
+            var pane = CreatePane(profile);
+            tab.Panes = [pane];
+            tab.LayoutRoot = new PaneLayout(pane);
+            tab.ActivePane = pane;
+            tab.CustomTitle = null;
+        }
 
-        var runtimeKey = session.Id + ":" + session.Agent;
         if (tab.ActiveProjectSession is { } activeSession && RuntimeKey(activeSession) == runtimeKey)
         {
             tab.Project = project;
@@ -1007,26 +1137,31 @@ ApplySavedFontSettings();
         {
             var prepared = await Task.Run(() =>
             {
-                var dataRoot = Environment.GetEnvironmentVariable("RTLTERMINAL_DATA_DIR");
-                if (string.IsNullOrWhiteSpace(dataRoot))
-                    dataRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AryanIQ", "Rtl Terminal");
-                var cachedRuntimeRoot = Path.Combine(dataRoot, "XAgentsRuntime", "project-sessions", session.Id);
+                var cachedRuntimeRoot = Path.Combine(AgentEngineDeployment.GetDataRoot(), "XAgentsRuntime", "project-sessions", session.Id);
                 var cachedCodexStatus = Path.Combine(cachedRuntimeRoot, "codex-account-status.js");
                 var retryFailedAgentStartup = session.Agent == "xagent" && Directory.Exists(cachedRuntimeRoot) &&
                     (!File.Exists(cachedCodexStatus) || !IsXAgentMainProcessRunning(cachedRuntimeRoot));
                 var runtimeRoot = AgentEngineDeployment.EnsureDeployed(session.Id);
                 var sessionPaths = session.Paths.Count > 0 ? session.Paths : project.Paths;
                 var handoffPath = GetSessionHandoffPath(runtimeRoot, session.Id);
+                WriteProjectPathsManifest(runtimeRoot, sessionPaths);
                 var command = AgentCommand(session.Agent, pane.Profile,
                     Path.Combine(runtimeRoot, "xagent.js"), sessionPaths, session.Id, handoffPath);
+                var environment = AgentEngineDeployment.CreateShellEnvironment(runtimeRoot);
+                environment["XAGENT_NO_FCM_AUTOSTART"] = "1";
+                environment["XAGENT_RTLTERMINAL"] = "1";
+                environment["XAGENT_PROJECT_PATHS_FILE"] = Path.Combine(runtimeRoot, "run", "project-paths.json");
+                environment["XAGENT_PROJECT_SESSION_ID"] = session.Id;
+                environment["XAGENT_TRANSCRIPT_HANDOFF_FILE"] = handoffPath;
                 WriteSessionHandoff(session, handoffPath);
-                return (runtimeRoot, command, retryFailedAgentStartup);
+                return (runtimeRoot, command, retryFailedAgentStartup, environment);
             }).ConfigureAwait(false);
 
             await Dispatcher.InvokeAsync(() =>
             {
                 runtime.StartPending = false;
                 runtime.RuntimeRoot = prepared.runtimeRoot;
+                pane.EnvironmentOverrides = prepared.environment;
                 if (!_tabs.Contains(tab) || !tab.ProjectRuntimes.TryGetValue(RuntimeKey(session), out var currentRuntime) ||
                     !ReferenceEquals(currentRuntime, runtime) || tab.ActiveProjectSession?.Id != session.Id ||
                     !ReferenceEquals(tab.ActivePane, pane)) return;
@@ -1053,16 +1188,6 @@ ApplySavedFontSettings();
         }
     }
 
-    private void PersistAllProjectRuntimes(TerminalTab tab)
-    {
-        if (tab.Project is not { } project) return;
-        foreach (var session in _projectStore.GetSessions(project.Id))
-            if (tab.ProjectRuntimes.TryGetValue(RuntimeKey(session), out var runtime))
-                PersistProjectRuntime(session, runtime);
-        if (tab.ActiveProjectSession is { } active && tab.ProjectRuntimes.TryGetValue(RuntimeKey(active), out var activeRuntime))
-            PersistProjectRuntime(active, activeRuntime);
-    }
-
     private static string RuntimeKey(SavedProjectSession session) => session.Id + ":" + session.Agent;
 
     private static string GetSessionHandoffPath(string runtimeRoot, string sessionId) =>
@@ -1079,31 +1204,6 @@ ApplySavedFontSettings();
         var temp = handoffPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         File.WriteAllText(temp, content, new UTF8Encoding(false));
         File.Move(temp, handoffPath, overwrite: true);
-    }
-
-    private void PersistProjectRuntime(SavedProjectSession session, ProjectSessionRuntime runtime)
-    {
-        if (_pendingTranscriptTasks.TryGetValue(session.Id, out var pending))
-        {
-            try { pending.GetAwaiter().GetResult(); }
-            catch (Exception exception) { Debug.WriteLine("Pending transcript save failed before final checkpoint: " + exception.Message); }
-            _pendingTranscriptTasks.Remove(session.Id);
-            _pendingTranscriptRevisions.Remove(session.Id);
-        }
-        var pane = runtime.ActivePane;
-        if (pane.Buffer is null) return;
-        var snapshot = pane.Buffer.CaptureSnapshot();
-        if (_savedTranscriptRevisions.TryGetValue(session.Id, out var savedRevision) && savedRevision == snapshot.Revision)
-            return;
-        var transcript = CreateSessionText(snapshot);
-        _projectStore.UpdateTranscript(session.Id, transcript);
-        try
-        {
-            var runtimeRoot = runtime.RuntimeRoot ?? AgentEngineDeployment.EnsureDeployed(session.Id);
-            WriteSessionHandoff(session with { Transcript = transcript }, GetSessionHandoffPath(runtimeRoot, session.Id));
-        }
-        catch (Exception exception) { Debug.WriteLine("Could not update X Agents transcript handoff: " + exception.Message); }
-        _savedTranscriptRevisions[session.Id] = snapshot.Revision;
     }
 
     private void QueuePersistProjectRuntime(SavedProjectSession session, ProjectSessionRuntime runtime)
@@ -1178,12 +1278,14 @@ ApplySavedFontSettings();
         {
             var statePath = Path.Combine(runtimeRoot, "xagent-state.json");
             using var document = JsonDocument.Parse(File.ReadAllText(statePath));
-            if (!document.RootElement.TryGetProperty("lastExit", out var exits) || exits.ValueKind != JsonValueKind.Object)
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("lastExit", out var exits) || exits.ValueKind != JsonValueKind.Object)
                 return;
             foreach (var item in exits.EnumerateObject())
             {
                 if (item.Value.ValueKind != JsonValueKind.Object ||
-                    !item.Value.TryGetProperty("code", out var code) || !code.TryGetInt32(out _) ||
+                    !item.Value.TryGetProperty("code", out var code) || code.ValueKind != JsonValueKind.Number || !code.TryGetInt32(out _) ||
                     !item.Value.TryGetProperty("at", out var at) || at.ValueKind != JsonValueKind.String ||
                     !DateTimeOffset.TryParse(at.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var completedAt))
                     continue;
@@ -1762,8 +1864,7 @@ ThemedMessageBox.Show(
             if (activeVoicePane.Session?.HasCodexProcess == true)
                 activeVoicePane.Session.Write("/voice stop\r");
             _codexVoicePane = null;
-            VoiceModeLabel.Text = "Voice";
-            VoiceModeButton.ToolTip = "Start Codex voice mode in the active Codex CLI pane";
+            SetVoiceModeButtonState(isActive: false);
             ActiveView.Focus();
             return;
         }
@@ -1776,9 +1877,19 @@ ThemedMessageBox.Show(
 
         session.Write("/voice\r");
         _codexVoicePane = pane;
-        VoiceModeLabel.Text = "Stop voice";
-        VoiceModeButton.ToolTip = "Stop Codex voice mode in the pane where it was started";
+        SetVoiceModeButtonState(isActive: true);
         ActiveView.Focus();
+    }
+
+    private void SetVoiceModeButtonState(bool isActive)
+    {
+        VoiceModeLabel.Text = "Voice";
+        VoiceModeButton.SetResourceReference(
+            Control.ForegroundProperty,
+            isActive ? "AccentBrush" : "ChromeForegroundBrush");
+        VoiceModeButton.ToolTip = isActive
+            ? "Stop Codex voice mode in the pane where it was started"
+            : "Start Codex voice mode in the active Codex CLI pane";
     }
 
     private void CopyLastResponseButton_Click(object sender, RoutedEventArgs e)
@@ -2114,10 +2225,7 @@ ThemedMessageBox.Show(
         !showIntroduction ? profile switch
         {
             TerminalProfile.PowerShell => @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo -NoExit",
-            TerminalProfile.Wsl =>
-                """
-                C:\Windows\System32\wsl.exe --exec sh -lc "exec \"${SHELL:-/bin/bash}\" -l"
-                """,
+            TerminalProfile.Wsl => GetWslProfileCommand(showIntroduction: false),
             _ => @"C:\Windows\System32\cmd.exe /D /Q /V:OFF /K ""chcp 65001>nul"""
         } : (profile switch
         {
@@ -2125,10 +2233,7 @@ ThemedMessageBox.Show(
                 """
                 C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -NoLogo -NoExit -Command "$lines=@('+--------------------------------------------------------+','| Rtl Terminal v{APP_VERSION}                                     |','|                                                        |','| Author : AryanIQ                               |','| Source : github.com/cybersec-iq              |','| Instagram: @AryanIQ                                   |','+--------------------------------------------------------+','','  پشتیبانی کامل از زبان فارسی و راست‌به‌چپ',''); $lines | ForEach-Object { Write-Host $_ }"
                 """,
-            TerminalProfile.Wsl =>
-                """
-                C:\Windows\System32\wsl.exe --exec sh -lc "printf '%s\n' '+--------------------------------------------------------+' '| Rtl Terminal v{APP_VERSION}                                     |' '|                                                        |' '| Author : AryanIQ                               |' '| Source : github.com/cybersec-iq              |' '| Instagram: @AryanIQ                                   |' '+--------------------------------------------------------+' '' '  پشتیبانی کامل از زبان فارسی و راست‌به‌چپ' ''; exec \"${SHELL:-/bin/bash}\" -l"
-                """,
+            TerminalProfile.Wsl => GetWslProfileCommand(showIntroduction: true),
             _ =>
                 """
                 C:\Windows\System32\cmd.exe /D /Q /V:OFF /K "chcp 65001>nul & echo +--------------------------------------------------------+& echo ^| Rtl Terminal v{APP_VERSION}                                     ^|& echo ^|                                                        ^|& echo ^| Author : AryanIQ                               ^|& echo ^| Source : github.com/cybersec-iq              ^|& echo ^| Instagram: @AryanIQ                                   ^|& echo +--------------------------------------------------------+& echo.& echo   پشتیبانی کامل از زبان فارسی و راست‌به‌چپ& echo."
@@ -2137,6 +2242,22 @@ ThemedMessageBox.Show(
         if (profile == TerminalProfile.Wsl && !string.IsNullOrWhiteSpace(wslDistribution))
             command = command.Replace("wsl.exe --exec", "wsl.exe --distribution " + ShellPath.WindowsArgument(wslDistribution) + " --exec");
         return command;
+    }
+
+    private static string GetWslProfileCommand(bool showIntroduction)
+    {
+        var introduction = showIntroduction
+            ? $"printf '%s\\n' '+--------------------------------------------------------+' '| Rtl Terminal v{AppVersion.Display}                                     |' '|                                                        |' '| Author : AryanIQ                               |' '| Source : github.com/cybersec-iq              |' '| Instagram: @AryanIQ                                   |' '+--------------------------------------------------------+' '' '  پشتیبانی کامل از زبان فارسی و راست‌به‌چپ' ''; "
+            : "";
+        var bootstrap = introduction +
+            "shim_dir=\"$HOME/.local/bin\"; " +
+            "shim_source=\"${XAGENT_SHIM_ROOT:-}/xagent\"; " +
+            "if [ -e \"$shim_dir/xagent\" ] && [ -n \"${XAGENT_SHIM_ROOT:-}\" ] && ! cmp -s \"$shim_source\" \"$shim_dir/xagent\"; then shim_dir=\"$HOME/.local/share/rtl-terminal/xagent-bin\"; fi; " +
+            "shim_tmp=\"$shim_dir/xagent.rtl-terminal.$$\"; " +
+            "if [ -n \"${XAGENT_SHIM_ROOT:-}\" ] && mkdir -p \"$shim_dir\" && cp \"$shim_source\" \"$shim_tmp\" && chmod 700 \"$shim_tmp\" && mv -f \"$shim_tmp\" \"$shim_dir/xagent\"; then :; " +
+            "else printf '%s\\n' 'Rtl Terminal could not prepare the xagent command in this WSL distribution.' >&2; fi; " +
+            "export PATH=\"$shim_dir:$PATH\"; exec \"${SHELL:-/bin/bash}\" -l";
+        return "C:\\Windows\\System32\\wsl.exe --exec sh -lc \"" + bootstrap.Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
     }
 
     private static bool IsWslAvailable()
@@ -2550,13 +2671,11 @@ ThemedMessageBox.Show(
 
             var manageSessions = new MenuItem { Header = "Sessions" };
             var sessions = new MenuItem { Header = "Switch session" };
-            // WPF does not show a submenu arrow for an empty MenuItem. Populate once
-            // before display, then refresh whenever it opens so saved sessions are
-            // selectable on the first click.
+            // Populate before the context menu is displayed so submenu contents
+            // stay stable while the pointer moves through the menu tree.
             PopulateSessionsSubmenu(tab, sessions);
-            sessions.SubmenuOpened += (_, _) => PopulateSessionsSubmenu(tab, sessions);
             manageSessions.Items.Add(sessions);
-            manageSessions.Items.Add(CreateAddSessionMenuItem(tab.Project, tab.Profile));
+            manageSessions.Items.Add(CreateAddSessionMenuItem(tab.Project, tab.Profile, tab));
             if (tab.ActiveProjectSession is { } activeSession)
             {
                 var sessionRename = new MenuItem { Header = "Rename session..." };
@@ -2569,7 +2688,13 @@ ThemedMessageBox.Show(
             }
             menu.Items.Add(manageSessions);
         }
-        else menu.Items.Add(rename);
+        else
+        {
+            menu.Items.Add(rename);
+            var openProjectSession = new MenuItem { Header = "Open project session here" };
+            PopulateProjectSessionsSubmenu(tab, openProjectSession);
+            menu.Items.Add(openProjectSession);
+        }
         menu.Items.Add(new Separator());
         menu.Items.Add(duplicate);
         menu.Items.Add(split);
@@ -2667,13 +2792,39 @@ ThemedMessageBox.Show(
         {
             var notifications = new MenuItem { Header = $"Completed ({completedSessions.Sum(session => session.CompletionCount)})" };
             foreach (var session in completedSessions)
-                notifications.Items.Add(CreateProjectSessionMenuItem(project, session, tab.Profile));
+                notifications.Items.Add(CreateProjectSessionMenuItem(project, session, tab.Profile, targetTab: tab));
             parent.Items.Add(notifications);
             parent.Items.Add(new Separator());
         }
 
         foreach (var session in savedSessions)
-            parent.Items.Add(CreateProjectSessionMenuItem(project, session, tab.Profile));
+            parent.Items.Add(CreateProjectSessionMenuItem(project, session, tab.Profile, targetTab: tab));
+    }
+
+    private void PopulateProjectSessionsSubmenu(TerminalTab targetTab, MenuItem parent)
+    {
+        parent.Items.Clear();
+        var projects = _projectStore.GetProjects();
+        if (projects.Count == 0)
+        {
+            parent.Items.Add(new MenuItem { Header = "No saved projects", IsEnabled = false });
+            return;
+        }
+
+        foreach (var project in projects)
+        {
+            var projectItem = new MenuItem { Header = project.Name };
+            var sessions = _projectStore.GetSessions(project.Id);
+            if (sessions.Count == 0)
+                projectItem.Items.Add(new MenuItem { Header = "No sessions yet", IsEnabled = false });
+            else
+                foreach (var session in sessions)
+                    projectItem.Items.Add(CreateProjectSessionMenuItem(project, session, targetTab.Profile, targetTab: targetTab));
+
+            projectItem.Items.Add(new Separator());
+            projectItem.Items.Add(CreateAddSessionMenuItem(project, targetTab.Profile, targetTab));
+            parent.Items.Add(projectItem);
+        }
     }
 
     private MenuItem CreateProjectFoldersMenuItem(TerminalTab tab)
@@ -2725,7 +2876,8 @@ ThemedMessageBox.Show(
             if (session.Agent != "xagent")
             {
                 // Save the prior engine's visible transcript before changing the engine key.
-                var projectTab = _tabs.FirstOrDefault(item => item.Project?.Id == project.Id);
+                var projectTab = _tabs.FirstOrDefault(item => item.ActiveProjectSession?.Id == session.Id) ??
+                    _tabs.FirstOrDefault(item => item.ProjectRuntimes.ContainsKey(RuntimeKey(session)));
                 if (projectTab is not null && projectTab.ProjectRuntimes.TryGetValue(RuntimeKey(session), out var runtime))
                     QueuePersistProjectRuntime(session, runtime);
                 session = session with { Agent = "xagent" };
@@ -2743,7 +2895,8 @@ ThemedMessageBox.Show(
         if (name is null) return;
         project = project with { Name = name };
         _projectStore.UpdateProject(project);
-        tab.Project = project;
+        foreach (var projectTab in _tabs.Where(item => item.Project?.Id == project.Id))
+            projectTab.Project = project;
         RebuildTabStrip();
     }
 
@@ -2753,8 +2906,8 @@ ThemedMessageBox.Show(
         if (name is null) return;
         var updated = session with { Name = name };
         _projectStore.UpdateSession(updated);
-        var tab = _tabs.FirstOrDefault(item => item.Project?.Id == project.Id);
-        if (tab?.ActiveProjectSession?.Id == session.Id) tab.ActiveProjectSession = updated;
+        foreach (var tab in _tabs.Where(item => item.ActiveProjectSession?.Id == session.Id))
+            tab.ActiveProjectSession = updated;
         RebuildTabStrip();
     }
 
@@ -2790,8 +2943,7 @@ ThemedMessageBox.Show(
             if (!session.Paths.SequenceEqual(mergedPaths, StringComparer.OrdinalIgnoreCase))
                 _projectStore.UpdateSession(session with { Paths = mergedPaths });
         }
-        var tab = _tabs.FirstOrDefault(item => item.Project?.Id == project.Id);
-        if (tab is not null)
+        foreach (var tab in _tabs.Where(item => item.Project?.Id == project.Id))
         {
             tab.Project = project;
             if (tab.ActiveProjectSession is { } active)
@@ -2810,8 +2962,7 @@ ThemedMessageBox.Show(
         if (name is null) return;
         project = project with { Name = name };
         _projectStore.UpdateProject(project);
-        var tab = _tabs.FirstOrDefault(item => item.Project?.Id == project.Id);
-        if (tab is not null) tab.Project = project;
+        foreach (var tab in _tabs.Where(item => item.Project?.Id == project.Id)) tab.Project = project;
         RebuildTabStrip();
     }
 
@@ -2832,8 +2983,7 @@ ThemedMessageBox.Show(
         if (!ConfirmMetadataRemoval("Delete project",
                 $"Delete project '{project.Name}' and its saved sessions?\n\nFolder contents on disk will not be deleted.")) return;
         var sessions = _projectStore.GetSessions(project.Id);
-        var tab = _tabs.FirstOrDefault(item => item.Project?.Id == project.Id);
-        if (tab is not null) RemoveProjectTab(tab);
+        foreach (var tab in _tabs.Where(item => item.Project?.Id == project.Id).ToArray()) RemoveProjectTab(tab);
         foreach (var session in sessions) DeleteSessionRuntimeData(session.Id);
         _projectStore.DeleteProject(project.Id);
         RebuildTabStrip();
@@ -2844,15 +2994,33 @@ ThemedMessageBox.Show(
         if (!ConfirmMetadataRemoval("Delete session",
                 $"Delete session '{session.Name}' and its saved history?\n\nProject folders and their contents will not be deleted.")) return;
 
-        var tab = _tabs.FirstOrDefault(item => item.Project?.Id == project.Id);
-        var active = tab?.ActiveProjectSession?.Id == session.Id;
+        var projectTabs = _tabs.Where(item => item.Project?.Id == project.Id).ToArray();
+        var activeTab = projectTabs.FirstOrDefault(item => item.ActiveProjectSession?.Id == session.Id);
         var remaining = _projectStore.GetSessions(project.Id).Where(item => item.Id != session.Id).ToArray();
-        if (active && tab is not null && remaining.Length > 0)
-            OpenProjectSession(project, remaining[0]);
-        if (tab is not null)
+        foreach (var tab in projectTabs)
+            if (!ReferenceEquals(tab, activeTab))
+                StopAndRemoveProjectRuntime(tab, session);
+
+        if (activeTab is not null)
+        {
+            if (remaining.Length == 0)
+                RemoveProjectTab(activeTab);
+            else
+            {
+                var replacement = remaining.FirstOrDefault(item => activeTab.ProjectRuntimes.ContainsKey(RuntimeKey(item))) ?? remaining[0];
+                var alreadyOpen = _tabs.Any(item => !ReferenceEquals(item, activeTab) &&
+                    (item.ActiveProjectSession?.Id == replacement.Id || item.ProjectRuntimes.ContainsKey(RuntimeKey(replacement))));
+                if (alreadyOpen) RemoveProjectTab(activeTab);
+                else
+                {
+                    OpenProjectSession(project, replacement, targetTab: activeTab);
+                    StopAndRemoveProjectRuntime(activeTab, session);
+                }
+            }
+        }
+
+        foreach (var tab in projectTabs.Where(item => !ReferenceEquals(item, activeTab)))
             StopAndRemoveProjectRuntime(tab, session);
-        if (active && tab is not null && remaining.Length == 0)
-            RemoveProjectTab(tab);
         DeleteSessionRuntimeData(session.Id);
         _projectStore.DeleteSession(session.Id);
         RebuildTabStrip();
@@ -2866,12 +3034,19 @@ ThemedMessageBox.Show(
 
     private void StopAndRemoveProjectRuntime(TerminalTab tab, SavedProjectSession session)
     {
-        if (!tab.ProjectRuntimes.Remove(RuntimeKey(session), out var runtime)) return;
-        foreach (var pane in runtime.Panes)
+        var sessionPrefix = session.Id + ":";
+        var runtimes = tab.ProjectRuntimes
+            .Where(pair => pair.Key.StartsWith(sessionPrefix, StringComparison.OrdinalIgnoreCase))
+            .ToArray();
+        foreach (var pair in runtimes)
         {
-            try { (pane.Session as PersistentConPtySession)?.StopBroker(); }
-            catch (Exception exception) { Debug.WriteLine("Could not stop deleted session broker: " + exception.Message); }
-            _ = pane.DisposeAsync();
+            tab.ProjectRuntimes.Remove(pair.Key);
+            foreach (var pane in pair.Value.Panes)
+            {
+                try { (pane.Session as PersistentConPtySession)?.StopBroker(); }
+                catch (Exception exception) { Debug.WriteLine("Could not stop deleted session broker: " + exception.Message); }
+                _ = pane.DisposeAsync();
+            }
         }
     }
 
@@ -2910,11 +3085,10 @@ ThemedMessageBox.Show(
         if (paths is null) return;
         var updated = session with { Paths = paths };
         _projectStore.UpdateSession(updated);
-        var tab = _tabs.FirstOrDefault(item => item.Project?.Id == project.Id);
-        if (tab?.ActiveProjectSession?.Id == session.Id)
+        foreach (var tab in _tabs.Where(item => item.ActiveProjectSession?.Id == session.Id))
         {
             tab.ActiveProjectSession = updated;
-            ApplyProjectFoldersToRuntime(tab, project, updated);
+            ApplyProjectFoldersToRuntime(tab, tab.Project ?? project, updated);
         }
         // Tab context menus are attached to the tab-strip buttons. Rebuild them so
         // reopening the session's Folders submenu reflects the saved paths immediately.
@@ -2931,7 +3105,16 @@ ThemedMessageBox.Show(
         // for its next child launch without restarting the project shell/session.
         // A provider TUI already in progress has its own immutable launch arguments.
         var paths = session.Paths.Count > 0 ? session.Paths : project.Paths;
-        var runDirectory = Path.Combine(runtime.RuntimeRoot, "run");
+        try { WriteProjectPathsManifest(runtime.RuntimeRoot, paths); }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+        {
+            Debug.WriteLine("Could not hot-update X Agents project folders: " + exception.Message);
+        }
+    }
+
+    private static void WriteProjectPathsManifest(string runtimeRoot, IReadOnlyList<string> paths)
+    {
+        var runDirectory = Path.Combine(runtimeRoot, "run");
         var manifest = Path.Combine(runDirectory, "project-paths.json");
         var temporary = manifest + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
@@ -2941,10 +3124,9 @@ ThemedMessageBox.Show(
                 new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
             File.Move(temporary, manifest, overwrite: true);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or JsonException)
+        finally
         {
             try { if (File.Exists(temporary)) File.Delete(temporary); } catch { }
-            Debug.WriteLine("Could not hot-update X Agents project folders: " + exception.Message);
         }
     }
 
@@ -3204,8 +3386,9 @@ ThemedMessageBox.Show(
                 CheckpointProjectRuntimes();
             else
             {
-                try { PersistAllProjectRuntimes(tab); }
-                catch (Exception exception) { Debug.WriteLine("Could not checkpoint project session before closing tab: " + exception.Message); }
+                // Keep the last project tab alive until the asynchronous close checkpoint completes.
+                Close();
+                return;
             }
         }
 
@@ -3709,6 +3892,41 @@ ThemedMessageBox.Show(
         _temporaryClipboardFiles.Clear();
     }
 
+    private static void SchedulePendingStartupCommandFallback(TerminalPane pane, ITerminalTransport session,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(Interlocked.CompareExchange(ref pane.PendingStartupCommand, null, null))) return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
+                DispatchPendingStartupCommand(pane, session, cancellationToken, TimeSpan.Zero);
+            }
+            catch (OperationCanceledException) { }
+        });
+    }
+
+    private static void DispatchPendingStartupCommand(TerminalPane pane, ITerminalTransport session,
+        CancellationToken cancellationToken, TimeSpan delay)
+    {
+        var startupCommand = Interlocked.Exchange(ref pane.PendingStartupCommand, null);
+        if (string.IsNullOrWhiteSpace(startupCommand)) return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                if (delay > TimeSpan.Zero)
+                    await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                if (!cancellationToken.IsCancellationRequested && !pane.IsDisposed && ReferenceEquals(pane.Session, session))
+                    session.Write(startupCommand + "\r");
+            }
+            catch (OperationCanceledException) { }
+            catch (ObjectDisposedException) { }
+            catch (IOException exception) { Debug.WriteLine("Could not send the Agent startup command: " + exception.Message); }
+        });
+    }
+
     private void ReadOutputLoop(TerminalPane pane)
     {
         var session = pane.Session;
@@ -3727,6 +3945,7 @@ ThemedMessageBox.Show(
         var decoder = Encoding.UTF8.GetDecoder();
         var cancellationToken = cancellationTokenSource.Token;
         string? terminalEndMessage = null;
+        SchedulePendingStartupCommandFallback(pane, session, cancellationToken);
 
         while (!cancellationToken.IsCancellationRequested)
         {
@@ -3766,21 +3985,7 @@ ThemedMessageBox.Show(
 
             var output = new string(characters, 0, characterCount);
 
-            var startupCommand = Interlocked.Exchange(ref pane.PendingStartupCommand, null);
-            if (!string.IsNullOrWhiteSpace(startupCommand))
-            {
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await Task.Delay(100, cancellationToken).ConfigureAwait(false);
-                        if (!cancellationToken.IsCancellationRequested && ReferenceEquals(pane.Session, session))
-                            session.Write(startupCommand + "\r");
-                    }
-                    catch (OperationCanceledException) { }
-                    catch (ObjectDisposedException) { }
-                });
-            }
+            DispatchPendingStartupCommand(pane, session, cancellationToken, TimeSpan.FromMilliseconds(100));
 
             var snapshot = buffer.Process(output);
 
@@ -3796,6 +4001,7 @@ ThemedMessageBox.Show(
         if (terminalEndMessage is not null && !cancellationToken.IsCancellationRequested &&
             ReferenceEquals(pane.Session, session) && !pane.IsDisposed)
         {
+            Interlocked.Exchange(ref pane.PendingStartupCommand, null);
             QueueRender(pane, buffer.Process(terminalEndMessage));
         }
     }
@@ -4055,6 +4261,7 @@ ThemedMessageBox.Show(
         public bool IsShown { get; set; }
         public string? StartupDirectory { get; set; }
         public string? WslDistribution { get; set; }
+        public IReadOnlyDictionary<string, string>? EnvironmentOverrides { get; set; }
         public ITerminalTransport? Session { get; set; }
         public bool PersistentSessionReconnected { get; set; }
         public bool PersistentAttachPending { get; set; }

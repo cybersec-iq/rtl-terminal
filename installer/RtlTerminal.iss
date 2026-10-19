@@ -36,13 +36,24 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription:
 
 [Files]
 Source: "{#PublishDirectory}\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#PublishDirectory}\ConPty\*"; DestDir: "{app}\ConPty"; Flags: ignoreversion recursesubdirs createallsubdirs
+; List each architecture-specific ConPTY dependency so the installer compile fails
+; instead of producing a release that silently omits terminal host files.
+Source: "{#PublishDirectory}\ConPty\x64\conpty.dll"; DestDir: "{app}\ConPty\x64"; Flags: ignoreversion
+Source: "{#PublishDirectory}\ConPty\x64\OpenConsole.exe"; DestDir: "{app}\ConPty\x64"; Flags: ignoreversion
+Source: "{#PublishDirectory}\ConPty\x86\conpty.dll"; DestDir: "{app}\ConPty\x86"; Flags: ignoreversion
+Source: "{#PublishDirectory}\ConPty\x86\OpenConsole.exe"; DestDir: "{app}\ConPty\x86"; Flags: ignoreversion
+Source: "{#PublishDirectory}\ConPty\arm64\conpty.dll"; DestDir: "{app}\ConPty\arm64"; Flags: ignoreversion
+Source: "{#PublishDirectory}\ConPty\arm64\OpenConsole.exe"; DestDir: "{app}\ConPty\arm64"; Flags: ignoreversion
 Source: "{#PublishDirectory}\AgentEngine\xagent.js"; DestDir: "{app}\AgentEngine"; Flags: ignoreversion
 Source: "{#PublishDirectory}\AgentEngine\codex-account-status.js"; DestDir: "{app}\AgentEngine"; Flags: ignoreversion
 Source: "{#PublishDirectory}\AgentEngine\route-ui.js"; DestDir: "{app}\AgentEngine"; Flags: ignoreversion
 Source: "{#PublishDirectory}\AgentEngine\route-hub.js"; DestDir: "{app}\AgentEngine"; Flags: ignoreversion
 Source: "{#PublishDirectory}\AgentEngine\generic-broker.js"; DestDir: "{app}\AgentEngine"; Flags: ignoreversion
 Source: "{#PublishDirectory}\AgentEngine\registry.json"; DestDir: "{app}\AgentEngine"; Flags: ignoreversion
+; Require every shell shim at installer compile time so published releases cannot omit X Agents CLI launchers.
+Source: "{#PublishDirectory}\AgentEngine\Shims\xagent.cmd"; DestDir: "{app}\AgentEngine\Shims"; Flags: ignoreversion
+Source: "{#PublishDirectory}\AgentEngine\Shims\xagent.ps1"; DestDir: "{app}\AgentEngine\Shims"; Flags: ignoreversion
+Source: "{#PublishDirectory}\AgentEngine\Shims\xagent"; DestDir: "{app}\AgentEngine\Shims"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Rtl Terminal"; Filename: "{app}\{#AppExeName}"

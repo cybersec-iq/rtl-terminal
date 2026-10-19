@@ -26,10 +26,54 @@
                 <Setter Property="Background" Value="{DynamicResource DialogSurfaceBrush}" />
                 <Setter Property="Foreground" Value="{DynamicResource DialogForegroundBrush}" />
                 <Setter Property="BorderBrush" Value="{DynamicResource DialogBorderBrush}" />
+                <Setter Property="Padding" Value="12,7" />
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="TabItem">
+                            <Grid SnapsToDevicePixels="True">
+                                <Border x:Name="TabBackground"
+                                        Background="{TemplateBinding Background}"
+                                        BorderBrush="{TemplateBinding BorderBrush}"
+                                        BorderThickness="0,0,0,1"
+                                        Padding="{TemplateBinding Padding}">
+                                    <ContentPresenter ContentSource="Header"
+                                                      RecognizesAccessKey="True"
+                                                      HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center"
+                                                      TextElement.Foreground="{TemplateBinding Foreground}" />
+                                </Border>
+                                <Border x:Name="SelectedIndicator"
+                                        Height="2"
+                                        VerticalAlignment="Bottom"
+                                        Background="Transparent" />
+                            </Grid>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="TabBackground" Property="Background" Value="{DynamicResource DialogSelectionBrush}" />
+                                    <Setter Property="Foreground" Value="{DynamicResource DialogForegroundBrush}" />
+                                </Trigger>
+                                <Trigger Property="IsSelected" Value="True">
+                                    <Setter TargetName="TabBackground" Property="Background" Value="{DynamicResource DialogSelectionBrush}" />
+                                    <Setter Property="Foreground" Value="{DynamicResource DialogForegroundBrush}" />
+                                    <Setter TargetName="SelectedIndicator" Property="Background" Value="{DynamicResource DialogAccentBrush}" />
+                                    <Setter Property="FontWeight" Value="SemiBold" />
+                                </Trigger>
+                                <Trigger Property="IsKeyboardFocused" Value="True">
+                                    <Setter TargetName="SelectedIndicator" Property="Background" Value="{DynamicResource FocusBrush}" />
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter Property="Opacity" Value="0.55" />
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
                 <Style.Triggers>
+                    <Trigger Property="IsMouseOver" Value="True">
+                        <Setter Property="Background" Value="{DynamicResource DialogSelectionBrush}" />
+                    </Trigger>
                     <Trigger Property="IsSelected" Value="True">
-                        <Setter Property="Background" Value="{DynamicResource DialogInputBrush}" />
-                        <Setter Property="FontWeight" Value="SemiBold" />
+                        <Setter Property="Background" Value="{DynamicResource DialogSelectionBrush}" />
                     </Trigger>
                 </Style.Triggers>
             </Style>
@@ -218,11 +262,38 @@
                         <ListBox x:Name="ThemeListBox" SelectionChanged="ThemeListBox_SelectionChanged"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled" BorderBrush="{DynamicResource DialogBorderBrush}"
                                  AutomationProperties.Name="Color themes">
-                            <ListBox.ItemContainerStyle><Style TargetType="ListBoxItem"><Setter Property="Padding" Value="10,8"/><Setter Property="HorizontalContentAlignment" Value="Stretch"/></Style></ListBox.ItemContainerStyle>
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Padding" Value="10,8" />
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                    <Setter Property="Background" Value="Transparent" />
+                                    <Setter Property="Foreground" Value="{DynamicResource DialogForegroundBrush}" />
+                                    <Setter Property="BorderBrush" Value="Transparent" />
+                                    <Setter Property="BorderThickness" Value="1" />
+                                    <Style.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter Property="Background" Value="{DynamicResource DialogSelectionBrush}" />
+                                        </Trigger>
+                                        <Trigger Property="IsSelected" Value="True">
+                                            <Setter Property="Background" Value="{DynamicResource DialogAccentBrush}" />
+                                            <Setter Property="Foreground" Value="{DynamicResource DialogAccentForegroundBrush}" />
+                                            <Setter Property="BorderBrush" Value="{DynamicResource DialogAccentBrush}" />
+                                        </Trigger>
+                                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                            <Setter Property="BorderBrush" Value="{DynamicResource FocusBrush}" />
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
                             <ListBox.ItemTemplate><DataTemplate>
                                 <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="32"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                     <Border Width="22" Height="22" Background="{Binding Swatch}" BorderBrush="{DynamicResource DialogBorderBrush}" BorderThickness="1" CornerRadius="4" VerticalAlignment="Center"/>
-                                    <StackPanel Grid.Column="1"><TextBlock Text="{Binding Name}" FontWeight="SemiBold"/><TextBlock Text="{Binding ModeLabel}" FontSize="11" Opacity="0.7" Margin="0,2,0,0"/></StackPanel>
+                                    <StackPanel Grid.Column="1">
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                                   Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" />
+                                        <TextBlock Text="{Binding ModeLabel}" FontSize="11" Opacity="0.8" Margin="0,2,0,0"
+                                                   Foreground="{Binding Foreground, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" />
+                                    </StackPanel>
                                 </Grid>
                             </DataTemplate></ListBox.ItemTemplate>
                         </ListBox>

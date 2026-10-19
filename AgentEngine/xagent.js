@@ -203,7 +203,7 @@ function binaryStrip() {
 
 // ---------------------------------------------------------------- matrix animation
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
-const ROOT_ITEMS = 12;
+const ROOT_ITEMS = 13;
 const rootBudget = () => termHeight() - ROOT_ITEMS - 8;
 
 /** Short 0/1 digital rain + banner reveal. <= ~1.5s, silent, any key skips, ~30fps. */
@@ -999,6 +999,8 @@ async function agyUsage(force) {
 // clipped to the terminal width/height, so nothing can wrap or scroll -> no duplicate bars.
 let SCREENS = [];       // stack
 let IDX = 0;
+let MENU_NUMBER_BUFFER = "";
+let MENU_NUMBER_TIMER = null;
 let MODE = "menu";      // menu | busy | prompt
 let ALT = false;        // alternate screen active
 let LOADING = "";       // shown in footer while an action is working
@@ -1138,7 +1140,7 @@ function layout() {
   if (LOADING) foot.push(C.yellow + " ⟳ " + LOADING + " ...");
   else if (FLASH && Date.now() < FLASH.until) foot.push(C.neon + " ✔ " + FLASH.text);
   else if (s.footer) foot.push(C.grey + " " + s.footer);
-  foot.push(C.grey + " ↑↓ move · Enter select · Esc back · q quit · r refresh");
+  foot.push(C.grey + ` 1-${s.items.length} select · ↑↓ move · Enter select · Esc back · q quit · r refresh`);
   foot.push(C.green + " " + (STATUS_BAR.length + 2 <= w ? STATUS_BAR : STATUS_SHORT));                       // the ONE status bar
   const viewport = menuViewport(s.items.length, IDX, h, head.length, foot.length);
   const n = s.items.length;
@@ -1148,7 +1150,8 @@ function layout() {
     const pointer = sel ? C.neon + "▶" + C.rs : " ";
     const label = (sel ? C.inv + C.neon : "") + " " + it.label + (sel ? C.rs : "");
     const right = it.right ? "  " + (it.rightColor || C.grey) + it.right + C.rs : "";
-    rows.push(` ${pointer} ${label}${right}`);
+    const shortcut = C.neon + String(i + 1).padStart(2, " ") + C.rs + " ";
+    rows.push(` ${shortcut}${pointer} ${label}${right}`);
   });
   return [...head, ...rows, ...foot].slice(0, h).map((l) => fit(l, w));
 }
@@ -1341,6 +1344,43 @@ function move(dir) {
 }
 function startMenuInput() { MODE = "menu"; resumeInput(); }
 
+function clearMenuNumberBuffer() {
+  MENU_NUMBER_BUFFER = "";
+  if (MENU_NUMBER_TIMER) clearTimeout(MENU_NUMBER_TIMER);
+  MENU_NUMBER_TIMER = null;
+}
+
+function activateMenuNumber(number, targetScreen) {
+  const s = screen();
+  if (MODE !== "menu" || ACTING || !s || s !== targetScreen || number < 1 || number > s.items.length) return;
+  const index = number - 1;
+  if (s.items[index].disabled || !s.items[index].action) return;
+  IDX = index;
+  draw();
+  void activate();
+}
+
+function handleMenuNumber(str, targetScreen) {
+  const combined = MENU_NUMBER_BUFFER + str;
+  if (MENU_NUMBER_TIMER) clearTimeout(MENU_NUMBER_TIMER);
+  MENU_NUMBER_TIMER = null;
+  if (combined.length > 1) {
+    clearMenuNumberBuffer();
+    const number = Number(combined);
+    if (Number.isInteger(number) && number >= 10 && number <= targetScreen.items.length)
+      activateMenuNumber(number, targetScreen);
+    return;
+  }
+  MENU_NUMBER_BUFFER = str;
+  MENU_NUMBER_TIMER = setTimeout(() => {
+    const value = MENU_NUMBER_BUFFER;
+    MENU_NUMBER_TIMER = null;
+    MENU_NUMBER_BUFFER = "";
+    activateMenuNumber(value === "0" ? 10 : Number(value), targetScreen);
+  }, 350);
+  MENU_NUMBER_TIMER.unref();
+}
+
 function onKey(str, key) {
   key = key || {};
   const name = key.name;
@@ -1348,6 +1388,8 @@ function onKey(str, key) {
   if (MODE === "prompt") return promptKey(str, key);
   if (MODE !== "menu" || ACTING) return;
   const s = screen(); if (!s) return;
+  if (/^[0-9]$/.test(str || "")) return handleMenuNumber(str, s);
+  if (MENU_NUMBER_TIMER) clearMenuNumberBuffer();
   if (name === "up" || str === "k") move(-1);
   else if (name === "down" || str === "j") move(1);
   else if (name === "home") { IDX = firstEnabled(s, 0, 1); draw(); }
@@ -1414,8 +1456,8 @@ function mainMenu() {
     title: "X AGENT — MAIN",
     items: [
       { label: "Coding Agent", right: "Open Codex · Enter", rightColor: C.neon, action: () => startPlainAgent("codex", { skipAuthProbe: true }) },
-      { label: "All Coding Agents", right: "More agents", rightColor: C.cyan, action: codingAgentsMenu },
       { label: "Free Agent", right: "verified free paths first", rightColor: C.neon, action: freeAgentMenu },
+      { label: "All Coding Agents", right: "More agents", rightColor: C.cyan, action: codingAgentsMenu },
       projectContinuityMenuItem(),
       { label: "Usage / Quota", right: "official sources only", rightColor: C.grey, action: usageMenu },
       { label: "Connectors / MCP", right: "providers · MCP servers", rightColor: C.grey, action: connectorsMenu },

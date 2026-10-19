@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -u
+
+if [[ -z "${XAGENT_ENGINE_ROOT:-}" || -z "${XAGENT_SHIM_ROOT:-}" || "$XAGENT_ENGINE_ROOT" == *$'\n'* || "$XAGENT_ENGINE_ROOT" == *$'\r'* ]]; then
+  printf '%s\n' 'X Agent CLI requires an active Rtl Terminal engine path.' >&2
+  exit 2
+fi
+
+# Prefer Linux Node so X Agents CLI inherits the WSL PTY directly. This keeps
+# its interactive ANSI interface and animation inside the current terminal.
+if command -v node >/dev/null 2>&1 && node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 18 ? 0 : 1)' >/dev/null 2>&1; then
+  exec node "$XAGENT_ENGINE_ROOT/xagent.js" "$@"
+fi
+
+if ! command -v wslpath >/dev/null 2>&1 || ! command -v powershell.exe >/dev/null 2>&1; then
+  printf '%s\n' 'X Agent CLI requires WSL interop with wslpath and powershell.exe enabled.' >&2
+  exit 127
+fi
+
+engine_root_windows="$(wslpath -w "$XAGENT_ENGINE_ROOT" 2>/dev/null)" || {
+  printf '%s\n' 'X Agent CLI could not resolve its Windows engine path from WSL.' >&2
+  exit 2
+}
+shim_root_windows="$(wslpath -w "$XAGENT_SHIM_ROOT" 2>/dev/null)" || {
+  printf '%s\n' 'X Agent CLI could not resolve its Windows launcher path from WSL.' >&2
+  exit 2
+}
+
+export XAGENT_ENGINE_ROOT="$engine_root_windows"
+exec powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass \
+  -File "${shim_root_windows}\\xagent.ps1" "$@"

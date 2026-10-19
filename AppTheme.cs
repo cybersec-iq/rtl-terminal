@@ -221,6 +221,10 @@ public static class AppTheme
         resources["DialogBorderBrush"] = resources["MenuBorderBrush"];
         resources["DialogSelectionBrush"] = resources["MenuHighlightBrush"];
         resources["DialogAccentBrush"] = resources["AccentBrush"];
+        var accentColor = resources["AccentBrush"] is SolidColorBrush accentBrush
+            ? accentBrush.Color
+            : Rgb(15, 118, 110);
+        resources["DialogAccentForegroundBrush"] = Frozen(ContrastForeground(accentColor));
     }
 
     private static SolidColorBrush Frozen(Color color)
@@ -302,6 +306,11 @@ public static class AppTheme
         var b = RelativeLuminance(second);
         return (Math.Max(a, b) + .05) / (Math.Min(a, b) + .05);
     }
+
+    private static Color ContrastForeground(Color background) =>
+        ContrastRatio(Colors.White, background) >= ContrastRatio(Colors.Black, background)
+            ? Colors.White
+            : Colors.Black;
 
     private static double RelativeLuminance(Color color)
     {

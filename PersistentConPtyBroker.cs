@@ -35,12 +35,12 @@ public sealed class PersistentConPtySession : ITerminalTransport
 
     public static PersistentConPtySession Start(
         string commandLine, string? workingDirectory, short columns, short rows,
-        string? brokerExecutablePath = null)
-        => Start(Guid.NewGuid().ToString("N"), commandLine, workingDirectory, columns, rows, brokerExecutablePath);
+        string? brokerExecutablePath = null, IReadOnlyDictionary<string, string>? environmentOverrides = null)
+        => Start(Guid.NewGuid().ToString("N"), commandLine, workingDirectory, columns, rows, brokerExecutablePath, environmentOverrides);
 
     public static PersistentConPtySession Start(
         string brokerId, string commandLine, string? workingDirectory, short columns, short rows,
-        string? brokerExecutablePath = null)
+        string? brokerExecutablePath = null, IReadOnlyDictionary<string, string>? environmentOverrides = null)
     {
         brokerId = ValidateId(brokerId);
         ArgumentException.ThrowIfNullOrWhiteSpace(commandLine);
@@ -49,12 +49,14 @@ public sealed class PersistentConPtySession : ITerminalTransport
             ?? throw new InvalidOperationException("Cannot locate the running executable to start the PTY broker.");
         var command = Convert.ToBase64String(Encoding.UTF8.GetBytes(commandLine));
         var directory = Convert.ToBase64String(Encoding.UTF8.GetBytes(workingDirectory ?? string.Empty));
+        var environment = Convert.ToBase64String(Encoding.UTF8.GetBytes(
+            System.Text.Json.JsonSerializer.Serialize(environmentOverrides ?? new Dictionary<string, string>())));
         var info = new ProcessStartInfo(exe)
         {
             UseShellExecute = false,
             CreateNoWindow = true,
             WindowStyle = ProcessWindowStyle.Hidden,
-            Arguments = $"{BrokerSwitch} {brokerId} {columns} {rows} {command} {directory}"
+            Arguments = $"{BrokerSwitch} {brokerId} {columns} {rows} {command} {directory} {environment}"
         };
         using var broker = Process.Start(info) ?? throw new InvalidOperationException("Could not start the ConPTY broker process.");
         try { return Connect(brokerId, TimeSpan.FromSeconds(20), reattached: false); }
@@ -68,13 +70,25 @@ public sealed class PersistentConPtySession : ITerminalTransport
     public static PersistentConPtySession Attach(string brokerId) => Connect(ValidateId(brokerId), TimeSpan.FromSeconds(5), reattached: true);
 
     public static PersistentConPtySession AttachOrStart(string brokerId, string commandLine,
-        string? workingDirectory, short columns, short rows)
+        string? workingDirectory, short columns, short rows,
+        IReadOnlyDictionary<string, string>? environmentOverrides = null)
     {
         try { return Attach(brokerId); }
         catch (PersistentSessionBusyException) { throw; }
         catch (Exception exception) when (exception is TimeoutException or IOException)
         {
-            return Start(brokerId, commandLine, workingDirectory, columns, rows);
+            switch (GetPipeState(brokerId))
+            {
+                case BrokerPipeState.Busy:
+                    throw new PersistentSessionBusyException(brokerId, exception);
+                case BrokerPipeState.Available:
+                    // The broker is healthy and accepting clients; retry the real attach
+                    // instead of racing it by starting another broker with the same id.
+                    return Connect(ValidateId(brokerId), TimeSpan.FromSeconds(5), reattached: true);
+                case BrokerPipeState.Unknown:
+                    throw new IOException("Could not safely determine whether the existing ConPTY broker is available.", exception);
+            }
+            return Start(brokerId, commandLine, workingDirectory, columns, rows, environmentOverrides: environmentOverrides);
         }
     }
 
@@ -90,13 +104,30 @@ public sealed class PersistentConPtySession : ITerminalTransport
                 pipe.ReadMode = PipeTransmissionMode.Byte;
                 return new PersistentConPtySession(id, pipe, reattached);
             }
-            catch (TimeoutException) when (until.Elapsed < timeout) { }
-            catch (IOException exception) when (until.Elapsed < timeout)
+            catch (TimeoutException exception)
             {
-                if (IsPipeBusy(id))
+                if (until.Elapsed >= timeout)
+                {
+                    pipe.Dispose();
+                    if (GetPipeState(id) == BrokerPipeState.Busy)
+                        throw new PersistentSessionBusyException(id, exception);
+                    throw new TimeoutException("The ConPTY broker did not accept a connection before the timeout.", exception);
+                }
+            }
+            catch (IOException exception)
+            {
+                var pipeState = GetPipeState(id);
+                if (pipeState == BrokerPipeState.Busy)
                 {
                     pipe.Dispose();
                     throw new PersistentSessionBusyException(id, exception);
+                }
+                if (until.Elapsed >= timeout)
+                {
+                    pipe.Dispose();
+                    if (pipeState == BrokerPipeState.Unknown)
+                        throw new IOException("Could not safely determine whether the existing ConPTY broker is available.", exception);
+                    throw new TimeoutException("The ConPTY broker did not accept a connection before the timeout.", exception);
                 }
             }
             if (until.Elapsed >= timeout)
@@ -176,10 +207,18 @@ public sealed class PersistentConPtySession : ITerminalTransport
 
     private static string PipeName(string id) => $"RtlTerminal.ConPty.{id}";
 
-    private static bool IsPipeBusy(string id)
+    private enum BrokerPipeState { Missing, Available, Busy, Unknown }
+
+    private static BrokerPipeState GetPipeState(string id)
     {
         var path = @"\\.\pipe\" + PipeName(id);
-        return !WaitNamedPipe(path, 0) && Marshal.GetLastWin32Error() == 121;
+        if (WaitNamedPipe(path, 0)) return BrokerPipeState.Available;
+        return Marshal.GetLastWin32Error() switch
+        {
+            2 or 3 => BrokerPipeState.Missing, // ERROR_FILE_NOT_FOUND / ERROR_PATH_NOT_FOUND
+            121 => BrokerPipeState.Busy,       // ERROR_SEM_TIMEOUT: all instances are connected
+            _ => BrokerPipeState.Unknown
+        };
     }
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -224,13 +263,17 @@ public sealed class PersistentConPtySession : ITerminalTransport
         if (marker < 0) return;
         try
         {
-            if (args.Length != marker + 6) throw new ArgumentException("Invalid broker arguments.");
+            if (args.Length != marker + 6 && args.Length != marker + 7) throw new ArgumentException("Invalid broker arguments.");
             var id = ValidateId(args[marker + 1]);
             var columns = short.Parse(args[marker + 2], System.Globalization.CultureInfo.InvariantCulture);
             var rows = short.Parse(args[marker + 3], System.Globalization.CultureInfo.InvariantCulture);
             var command = Encoding.UTF8.GetString(Convert.FromBase64String(args[marker + 4]));
             var directory = Encoding.UTF8.GetString(Convert.FromBase64String(args[marker + 5]));
-            BrokerHost.Run(id, columns, rows, command, string.IsNullOrEmpty(directory) ? null : directory)
+            var environment = args.Length == marker + 7
+                ? System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(
+                    Encoding.UTF8.GetString(Convert.FromBase64String(args[marker + 6])))
+                : null;
+            BrokerHost.Run(id, columns, rows, command, string.IsNullOrEmpty(directory) ? null : directory, environment)
                 .GetAwaiter().GetResult();
             Environment.Exit(0);
         }
@@ -250,10 +293,11 @@ public sealed class PersistentConPtySession : ITerminalTransport
     {
         private const int ReplayLimit = 512 * 1024;
 
-        internal static async Task Run(string id, short columns, short rows, string command, string? directory)
+        internal static async Task Run(string id, short columns, short rows, string command, string? directory,
+            IReadOnlyDictionary<string, string>? environmentOverrides)
         {
             using var session = new ConPtySession(columns, rows);
-            session.Start(command, directory);
+            session.Start(command, directory, environmentOverrides);
             using var outputStop = new CancellationTokenSource();
             var state = new HostState();
             var outputTask = Task.Run(() => ReadPtyOutput(session, state, outputStop.Token));

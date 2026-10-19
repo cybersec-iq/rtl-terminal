@@ -116,7 +116,8 @@ private const int PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
 
 
 
-    public void Start(string commandLine, string? workingDirectory = null)
+    public void Start(string commandLine, string? workingDirectory = null,
+        IReadOnlyDictionary<string, string>? environmentOverrides = null)
 
     {
 
@@ -171,7 +172,7 @@ private const int PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = 0x00020016;
 
 
 
-        var environment = Marshal.StringToHGlobalUni(TerminalEnvironment.Block());
+        var environment = Marshal.StringToHGlobalUni(TerminalEnvironment.Block(environmentOverrides));
         try
         {
             var success = CreateProcess(null, command, IntPtr.Zero, IntPtr.Zero, false,

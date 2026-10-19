@@ -14,6 +14,7 @@
         WindowStyle="None"
         ResizeMode="CanResize"
         Loaded="Window_Loaded"
+        Closing="Window_Closing"
         Closed="Window_Closed"
         SizeChanged="Window_SizeChanged"
         SourceInitialized="Window_SourceInitialized"
@@ -259,9 +260,12 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Border x:Name="CaptionBackground"
-                                Background="{TemplateBinding Background}">
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="Transparent"
+                                BorderThickness="1">
                             <ContentPresenter HorizontalAlignment="Center"
-                                              VerticalAlignment="Center" />
+                                              VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver"
@@ -269,6 +273,13 @@
                                 <Setter TargetName="CaptionBackground"
                                         Property="Background"
                                         Value="{DynamicResource CaptionHoverBrush}" />
+                                <Setter Property="Foreground"
+                                        Value="{DynamicResource ChromeStrongForegroundBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="CaptionBackground" Property="Background" Value="{DynamicResource CaptionHoverBrush}" />
+                                <Setter TargetName="CaptionBackground" Property="BorderBrush" Value="{DynamicResource FocusBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource ChromeStrongForegroundBrush}" />
                             </Trigger>
                             <Trigger Property="IsPressed"
                                      Value="True">
@@ -300,6 +311,47 @@
                                         Property="Background"
                                         Value="#a92316" />
                             </MultiTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ToolbarActionButtonStyle" TargetType="Button">
+            <Setter Property="Foreground" Value="{DynamicResource ChromeForegroundBrush}" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="ActionBackground"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="4"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                              TextElement.Foreground="{TemplateBinding Foreground}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ActionBackground" Property="Background" Value="{DynamicResource CaptionHoverBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource ChromeStrongForegroundBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="ActionBackground" Property="Background" Value="{DynamicResource CaptionHoverBrush}" />
+                                <Setter TargetName="ActionBackground" Property="BorderBrush" Value="{DynamicResource FocusBrush}" />
+                                <Setter Property="Foreground" Value="{DynamicResource ChromeStrongForegroundBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="ActionBackground" Property="Background" Value="{DynamicResource CaptionPressedBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5" />
+                            </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -485,20 +537,36 @@
             </Viewbox>
         </Button>
         <Button x:Name="CopyLastResponseButton" DockPanel.Dock="Right" MinWidth="84" Height="26" Margin="4,0,0,0"
-                Padding="7,0" Background="Transparent" BorderThickness="0"
-                Foreground="{DynamicResource ChromeForegroundBrush}"
+                Padding="7,0" Background="Transparent"
+                Style="{StaticResource ToolbarActionButtonStyle}"
                 Click="CopyLastResponseButton_Click"
                 ToolTip="Copy the latest completed Codex response (Ctrl+O)"
                 AutomationProperties.Name="Copy latest Codex response">
             <TextBlock Text="Copy report" FontSize="11" VerticalAlignment="Center" />
         </Button>
         <Button x:Name="VoiceModeButton" DockPanel.Dock="Right" MinWidth="72" Height="26" Margin="4,0,0,0"
-                Padding="8,0" Background="Transparent" BorderThickness="0"
-                Foreground="{DynamicResource ChromeForegroundBrush}"
+                Padding="8,0" Background="Transparent"
+                Style="{StaticResource ToolbarActionButtonStyle}"
                 Click="VoiceModeButton_Click"
                 ToolTip="Start Codex voice mode in the active Codex CLI pane"
                 AutomationProperties.Name="Voice mode">
-            <TextBlock x:Name="VoiceModeLabel" Text="Voice" FontSize="11" VerticalAlignment="Center" />
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <Viewbox Width="13" Height="16" Margin="0,0,5,0" Stretch="Uniform">
+                    <Canvas Width="14" Height="16">
+                        <Path Data="M7,9 C5.7,9 4.7,7.9 4.7,6.6 V3.6 C4.7,2.3 5.7,1.3 7,1.3 C8.3,1.3 9.3,2.3 9.3,3.6 V6.6 C9.3,7.9 8.3,9 7,9 Z"
+                              Fill="Transparent"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.4" />
+                        <Path Data="M11,6.5 C11,8.7 9.2,10.5 7,10.5 C4.8,10.5 3,8.7 3,6.5 M7,10.5 V14 M4.5,14 H9.5"
+                              Fill="Transparent"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.4"
+                              StrokeStartLineCap="Round"
+                              StrokeEndLineCap="Round" />
+                    </Canvas>
+                </Viewbox>
+                <TextBlock x:Name="VoiceModeLabel" Text="Voice" FontSize="11" VerticalAlignment="Center" />
+            </StackPanel>
         </Button>
         <ToggleButton x:Name="DarkModeButton" DockPanel.Dock="Right" Width="30" Height="26" Margin="4,0,0,0"
                       IsChecked="True" Click="DarkModeButton_Click" AutomationProperties.Name="Dark mode">

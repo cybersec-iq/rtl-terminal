@@ -131,6 +131,29 @@ internal sealed class ProjectSessionStore
         return projects;
     }
 
+    public (SavedProject Project, SavedProjectSession Session)? GetMostRecentlyActiveSession()
+    {
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT p.Id,p.Name,p.PathsJson,p.ActiveSessionId,
+                   s.Id,s.ProjectId,s.Name,s.Profile,s.Agent,s.PathsJson,s.Transcript,s.CompletionCount,s.ObservedAgentExitsJson
+            FROM Projects p
+            INNER JOIN ProjectSessions s ON s.Id=p.ActiveSessionId AND s.ProjectId=p.Id
+            WHERE p.ActiveSessionId IS NOT NULL
+            ORDER BY p.UpdatedAt DESC,p.Id DESC
+            LIMIT 1
+            """;
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return null;
+
+        var project = new SavedProject(reader.GetString(0), reader.GetString(1), ReadPaths(reader.GetString(2)), reader.GetString(3));
+        var session = new SavedProjectSession(reader.GetString(4), reader.GetString(5), reader.GetString(6),
+            reader.GetString(7), reader.GetString(8), ReadPaths(reader.GetString(9)), reader.GetString(10),
+            reader.GetInt32(11), reader.GetString(12));
+        return (project, session);
+    }
+
     public SavedProject CreateProject(string name, IReadOnlyList<string> paths)
     {
         var project = new SavedProject(Guid.NewGuid().ToString("N"), name.Trim(), CleanPaths(paths));
